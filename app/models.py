@@ -48,7 +48,7 @@ class EventType(str, enum.Enum):
     CHECKOUT_ABANDONED = "checkout_abandoned"
     # Customer-initiated, not Razorpay-reported - the one deliberate
     # exception to "Event only ever represents something Razorpay knows
-    # about" (see CLAUDE.md). Written once per /checkout/give-up-failed
+    # about". Written once per /checkout/give-up-failed
     # call as its OWN new Event+Decision row, specifically so it never
     # overwrites the outcome of the failed-payment Events it resolves -
     # each retry's own decision (retry_now, escalated, ...) stays visible

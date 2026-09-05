@@ -9,8 +9,8 @@ import {
 import type { FlowTone } from "./tokens";
 
 /** "Where the money goes" flowchart — same precision as journey-diagram.tsx and
- * pipeline-diagram.tsx. Three independent lanes, one per at-risk bucket (never crossed, per
- * CLAUDE.md) — each books its trigger's full value, then resolves through exactly one of two
+ * pipeline-diagram.tsx. Three independent lanes, one per at-risk bucket (never crossed) —
+ * each books its trigger's full value, then resolves through exactly one of two
  * exits. The lanes share an identical shape but genuinely different mechanics at each step, so
  * unlike the decision pipeline there's nothing to merge here — three parallel columns, not a
  * shared body, is the honest picture of "three separate threads." */

@@ -56,7 +56,7 @@ ATTRIBUTABLE_FAILURES = {
 # These are the gateway's, the issuer's, or nobody's - grading a customer
 # on them is the exact flaw this rewrite exists to remove.
 
-# Hardcoded on purpose - see the module docstring above and CLAUDE.md: these
+# Hardcoded on purpose - see the module docstring above: these
 # are an internal scoring detail, not a merchant-tunable knob. Named here
 # (rather than left as literals in engagement_score()) so nothing outside
 # this module - e.g. the /insights/tier-config explainer endpoint - has to

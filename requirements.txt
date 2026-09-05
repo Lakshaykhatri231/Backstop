@@ -6,4 +6,3 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 httpx==0.27.2
-aiofiles==23.2.1
