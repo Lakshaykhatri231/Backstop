@@ -1,6 +1,6 @@
 # Backstop
 
-**Razorpay Buildthon — Track 03: AI Revenue Recovery**
+ **AI Revenue Recovery**
 
 > *Find revenue that's slipping away and win it back.*
 
