@@ -163,6 +163,36 @@ Every signal follows the same sequence: **record event → deterministic rules d
 `retry_now` would kill the unknown/invalid-card path); the drop-off pipeline exempts only `escalate_to_human`. The cart-event path has no
 LLM layer and no gate — its action is already bounded by the deterministic tier formula.
 
+
+```mermaid
+flowchart TD
+    subgraph Detect["1. Detect: three signals, three detectors"]
+      F["Payment fails<br/>Razorpay webhook, HMAC-verified"]
+      D["Order created, never paid<br/>drop-off poller, every 10 min"]
+      C["Cart left or cancelled<br/>before any Razorpay order"]
+    end
+    F --> RF["Rules: attempt cap, value, reason code"]
+    D --> RD["Rules: abandonment count in 7 days"]
+    C --> RC["Rules: tier x signal strength<br/>no LLM on this path"]
+    RF & RD --> LLM["LLM refines confidence and wording<br/>action locked to the AgentAction enum"]
+    LLM -- "timeout or bad output" --> FB["Rules result kept<br/>llm_failure_fallback audited"]
+    LLM --> GATE{"Confidence at least 0.70<br/>and not high value?"}
+    FB --> GATE
+    GATE -- no --> HUM["Escalate to a human"]
+    GATE -- yes --> ACT["Action: retry, nudge, reminder,<br/>resume link or tier-based discount"]
+    RC --> ACT
+    ACT --> RISK[("Money sits in an at-risk bucket<br/>soft, declined or failed")]
+    RISK --> CAP{"What happens next?"}
+    CAP -- "payment.captured or verified checkout" --> REC["Recovered<br/>booked exactly once"]
+    CAP -- "give up, offer expired or window lapsed" --> LOST["Lost<br/>closed by the maintenance sweep"]
+    HUM --> AUD
+    REC --> AUD[("Audit log: every step")]
+    LOST --> AUD
+```
+
+An action is never reported as "recovered". Only a later capture confirms recovery, and each rupee leaves the at-risk bucket through exactly one
+of the two exits.
+
 ---
 
 ## Rules, tiering, incentives, money, audit
@@ -205,23 +235,15 @@ Tiers decide how much recovery effort a customer is worth. They are driven by an
 punished the customers who retried hardest (`FAILED, FAILED, CAPTURED` scored 33%). `NEW` and `RISK` are **states**, not rungs: a low score
 can't reach RISK and a high score can't rescue you from it.
 
-```mermaid
-flowchart TD
-    A([Customer's orders and cart behaviour]) --> B{Any purchase attempts?<br/>only CAPTURED / FAILED count}
-    B -- none --> NEW[NEW]
-    B -- yes --> C{RISK gate: any of three trips?}
-    C -- "prior risk_block<br/>(never expires)" --> RISK[RISK]
-    C -- "attributable failure rate &gt; 0.60<br/>(≥ 2 attempts)" --> RISK
-    C -- "cancel rate &gt; 0.60<br/>(≥ 2 intents)" --> RISK
-    C -- none trip --> S[Compute engagement score 0-100]
-    S --> D{score ≥ 70<br/>and ≥ 5 attempts?}
-    D -- yes --> LOYAL[LOYAL<br/>discount 20-30%, 1 offer / 30d]
-    D -- no --> E{score ≥ 40<br/>and ≥ 3 attempts?}
-    E -- yes --> REG[REGULAR<br/>discount 10-20%, 2 offers / 30d]
-    E -- no --> CAS[CASUAL<br/>discount 0-10%, 3 offers / 30d]
-    NEW -. no incentive .-> X[Never offered a discount]
-    RISK -. no incentive .-> X
-```
+**Tiers, in the order they are evaluated:**
+
+| Tier | Rule |
+|---|---|
+| `NEW` | No purchase attempts (checked first) |
+| `RISK` | Enforcement gate, checked before the score: a prior `risk_block` (never expires), attributable failure rate > 0.60, or cancel rate > 0.60 (the last two need ≥ 2 attempts) |
+| `LOYAL` | Score ≥ 70 and ≥ 5 attempts. Discount 20-30%, 1 offer / 30 days |
+| `REGULAR` | Score ≥ 40 and ≥ 3 attempts. Discount 10-20%, 2 offers / 30 days |
+| `CASUAL` | Everything else with ≥ 1 attempt. Discount 0-10%, 3 offers / 30 days |
 
 **The formula** (0-100, weights hardcoded on purpose):
 
@@ -288,6 +310,42 @@ These three features run on the **durable scheduler** (`scheduler.py`): every ti
 `UPDATE … WHERE status='scheduled'` (exactly once). Customer-facing job kinds run only **08:00–19:00 IST** — a job due outside the window is
 deferred, not dropped. A kind with no registered handler is skipped and audited.
 
+```mermaid
+flowchart TD
+    subgraph Autopay["Card autopay: we decide when, Razorpay moves the money"]
+      A1["Customer authorises a card on Razorpay<br/>Rs 1 check, not revenue"] --> A2["Notice job: debit order with notification<br/>at least 37 h before the debit"]
+      A2 --> A3["Debit job re-checks:<br/>mandate active, run unsettled, no paid link"]
+      A3 --> A4{"Debit result"}
+      A4 -- success --> A5["payment.captured books the revenue"]
+      A4 -- fails --> A6["Run opens: money in at_risk_mandate"]
+      A6 --> A7["Plan: notice at least 24 h ahead,<br/>call about 18 h before, retry at least 25 h out"]
+      A7 --> A8{"Outcome"}
+      A8 -- "retry succeeds" --> A5
+      A8 -- "customer promises a date" --> P
+      A8 -- "token dead or retries used up" --> A9["Re-mandate link"]
+      A9 -- "no new mandate in the window" --> A10["Lost, closed by the sweep"]
+    end
+    subgraph Invoice["B2B invoice: chase ladder"]
+      I1["Invoice with a Razorpay Payment Link<br/>made with the first chase message"] --> I2["Reminders at day -3, 1, 7, 15<br/>from the due date, firmer each step"]
+      I2 --> I3{"Paid?"}
+      I3 -- "in full or in parts, same link" --> I4["Collected"]
+      I3 -- "day 30 unpaid" --> I5["Escalated to finance<br/>a person decides a write-off"]
+    end
+    subgraph Promise["Promise to pay: status overlay, never moves money"]
+      P["Customer names a date<br/>by voice, self-serve page or merchant"] --> P1{"Date valid?<br/>7 days consumer, 30 business"}
+      P1 -- no --> P2["Ask again or hand to a person"]
+      P1 -- yes --> P3["Chasing pauses, link expiry extended,<br/>reminder the day before"]
+      P3 --> P4{"Paid by date plus 1 day grace?"}
+      P4 -- yes --> P5["Promise kept"]
+      P4 -- no --> P6["Broken: chase resumes one step firmer<br/>2 broken promises then a person"]
+    end
+    I2 -. "customer promises" .-> P
+    P6 -.-> A7
+    P6 -.-> I2
+```
+
+All timers are durable `ScheduledAction` rows, claimed atomically so each fires once. Customer-facing steps run only 08:00-19:00 IST.
+
 ### Card autopay (`autopay.py`, `mandate.py`)
 
 Razorpay holds the card token, sends the bank pre-debit notice and moves the money; **our scheduler decides when**. Nothing charges behind our
@@ -336,6 +394,39 @@ resumes "one step firmer", measured from the invoice's age on the ladder.
 ## The Hinglish voice agent
 
 One generic `place_call(subject_type, id)` with adapters for invoices, failed autopay debits and failed storefront orders.
+
+```mermaid
+flowchart TD
+    T["Scheduler places a call:<br/>failed autopay debit, failed order or overdue invoice"] --> G{"Guardrails in code<br/>verified number + customer-ticked consent,<br/>08:00-19:00 IST, 1 call a day, attempt cap, DND"}
+    G -- any fails --> SK["No call, reason audited"]
+    G -- all pass --> O["Fixed opening: 'AI assistant, may be recorded'<br/>in the contact's saved language"]
+    O --> H["Customer speaks<br/>browser VAD + Whisper STT"]
+    H --> SR{"Whole line is a short reply?<br/>haan, nahi, ruko, kya, acha"}
+    SR -- yes --> INT
+    SR -- no --> M["ONE model call per turn:<br/>intent, promise date, candidate reply<br/>sees the debt facts, the conversation, retrieved passages"]
+    M -- "model fails" --> KW["Keyword rules + fixed templates<br/>llm_failure_fallback audited"]
+    M --> INT{"Intent"}
+    KW --> INT
+    INT -- "question: amount, due, how to pay" --> Q["Answer from the debt's real numbers"]
+    INT -- "policy question" --> R["Search approved merchant passages"]
+    INT -- "asks about last call" --> MEM["Search this customer's memory<br/>only with memory consent"]
+    INT -- "promise with a date" --> PR["Deterministic date reader<br/>words win over the model, confirm if unsure"]
+    INT -- "hardship or refusal" --> HS["One kind acknowledgement,<br/>then ask for a date or a person"]
+    INT -- "dispute, complaint, legal" --> HP["Hand to a person"]
+    Q & R & MEM --> V{"Reply checker<br/>only real numbers, no fees or threats,<br/>no links, right language, grounded in a cited passage"}
+    V -- pass --> SP["Speak it: Azure neural voice or browser voice"]
+    V -- reject --> FT["Fixed template or the approved text read aloud"]
+    FT --> SP
+    SP --> H
+    PR --> BK["Promise booked, payment link kept alive"]
+    HS --> H
+    SP -. "6 turns used" .-> HP
+    BK --> END["Closing line, call recorded"]
+    HP --> END
+    END --> MW["Memory written in the background<br/>episode, facts and word-for-word chunks"]
+```
+
+The model never decides money: it classifies and drafts, and code validates every sentence before it is spoken.
 
 **Guardrails (hardcoded):** verified number + customer-ticked consent · 08:00–19:00 IST · one call a day · attempt cap · DND registry check.
 Consumer calls are for failed payments only (never abandoned carts) above a minimum value. A "dispute" on a mandate call is an
