@@ -14,12 +14,15 @@ import json
 import httpx
 
 from app.config import settings
-from app.models import FailureReason, AgentAction, EventType
+from app.models import FailureReason, AgentAction, EventType, SCHEDULER_ONLY_ACTIONS
 from app.rules_engine import rule_based_decision, rule_based_dropoff_decision
 from app.runtime_flags import is_llm_failure_forced
 
 # Actions available to the LLM — excludes RULE_DEFAULT_FALLBACK (internal only)
-VALID_ACTIONS = [a.value for a in AgentAction if a != AgentAction.RULE_DEFAULT_FALLBACK]
+VALID_ACTIONS = [
+    a.value for a in AgentAction
+    if a != AgentAction.RULE_DEFAULT_FALLBACK and a not in SCHEDULER_ONLY_ACTIONS
+]
 
 TOOL_NAME = "record_recovery_decision"
 TOOL_DESCRIPTION = "Record the final recovery decision for a revenue-loss event."

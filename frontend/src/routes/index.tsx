@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { AuthNav, RegisterInvoiceButton } from "@/features/auth/AuthNav";
 import heroTable from "@/assets/hero-table.jpg";
 
 export const Route = createFileRoute("/")({
@@ -42,14 +43,16 @@ function Home() {
             <Link to="/tiers" className="px-3 py-1.5 rounded-md text-ink/50 hover:text-ink">
               Tiers
             </Link>
-            <Link to="/login" className="px-3 py-1.5 rounded-md text-ink/50 hover:text-ink">
-              Sign in
+            <Link to="/demo-console" className="px-3 py-1.5 rounded-md text-ink/50 hover:text-ink">
+              Demo Console
             </Link>
           </nav>
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-soft/10 text-soft">
               <span className="size-1.5 rounded-full bg-soft" /> Razorpay Test Mode
             </span>
+            <RegisterInvoiceButton />
+            <AuthNav />
           </div>
         </div>
       </header>

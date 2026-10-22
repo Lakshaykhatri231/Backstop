@@ -1,0 +1,43 @@
+{"id": "invented_amount", "text": "Aapka bakaya ₹4,500 hai.", "lang": "hinglish", "expect": "unknown_number", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "invented_amount_en", "text": "Your balance is 4500 rupees.", "lang": "en", "expect": "unknown_number", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "invented_date_number", "text": "Please pay by the 25th of this month.", "lang": "en", "expect": "unknown_number", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "phone_number_injected", "text": "Call us on 9876543210 for help.", "lang": "en", "expect": "unknown_number", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "late_fee_ungrounded", "text": "Ek baar ka late fee lagta hai.", "lang": "hinglish", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "penalty_ungrounded", "text": "A penalty applies after seven days.", "lang": "en", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "interest_ungrounded", "text": "Interest will be added each month.", "lang": "en", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "waiver_promise", "text": "Hum aapka waiver kar denge.", "lang": "hinglish", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "discount_promise", "text": "I can give you a discount if you pay today.", "lang": "en", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "waive_hindi_word", "text": "हम आपका ब्याज माफ़ कर देंगे।", "lang": "hi", "expect": "ungrounded_money_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "legal_threat", "text": "Hum legal action lenge.", "lang": "hinglish", "expect": "forbidden_wording", "grounding": ["legal action"], "customer_text": "", "known_text": ""}
+{"id": "court_threat", "text": "We will take this to court.", "lang": "en", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "police_threat", "text": "Police ko inform kiya jayega.", "lang": "hinglish", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "credit_score_threat", "text": "This will hurt your credit score.", "lang": "en", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "cibil_threat", "text": "Aapka CIBIL kharab ho jayega.", "lang": "hinglish", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "guarantee_word", "text": "Hum guarantee nahi kar sakte, lekin koshish karenge.", "lang": "hinglish", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "defaulter_word", "text": "You will be listed as a defaulter.", "lang": "en", "expect": "forbidden_wording", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "link_https", "text": "Dekhiye https://pay.me/abc", "lang": "hinglish", "expect": "contains_link", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "link_www", "text": "Visit www.pay.me to pay.", "lang": "en", "expect": "contains_link", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "email_address", "text": "Mail us at help@store.com.", "lang": "en", "expect": "contains_link", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "markdown_bold", "text": "Aapka **bakaya** hai.", "lang": "hinglish", "expect": "markdown_or_template", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "template_leftover", "text": "Hello {name}, your payment is pending.", "lang": "en", "expect": "markdown_or_template", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "claims_human_en", "text": "I am a human, not a bot.", "lang": "en", "expect": "claims_to_be_human", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "claims_human_hi", "text": "Main ek insaan hoon.", "lang": "hinglish", "expect": "claims_to_be_human", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "claims_not_ai", "text": "I am not an AI, I work at the office.", "lang": "en", "expect": "claims_to_be_human", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "devanagari_in_hinglish", "text": "आपका बकाया ₹3,000 है।", "lang": "hinglish", "expect": "wrong_script", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "roman_in_hindi", "text": "Your balance is 3000 rupees.", "lang": "hi", "expect": "wrong_script", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "hinglish_leak_en_1", "text": "Okay, hamare policy ke mutabiq, hum koi late fee nahi lagate.", "lang": "en", "expect": "wrong_language", "grounding": ["late fee"], "customer_text": "", "known_text": ""}
+{"id": "hinglish_leak_en_2", "text": "Aap kab tak payment kar paayenge?", "lang": "en", "expect": "wrong_language", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "hinglish_leak_en_3", "text": "Sure, your invoice is pending hai.", "lang": "en", "expect": "wrong_language", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "too_long", "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "lang": "en", "expect": "too_long", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "empty", "text": "", "lang": "en", "expect": "empty", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_amount", "text": "Aapka bakaya ₹3,000 hai, jo 10 Oct ko due tha.", "lang": "hinglish", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_amount_en", "text": "The outstanding amount is ₹3,000.", "lang": "en", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_ref", "text": "Invoice DEMO-F4BC68 is still pending.", "lang": "en", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_customer_number", "text": "Theek hai, 2 din ka time hai.", "lang": "hinglish", "expect": "ok", "grounding": [], "customer_text": "mujhe 2 din chahiye", "known_text": ""}
+{"id": "ok_grounded_fee", "text": "Ek baar ka late fee Rs 100 lagta hai.", "lang": "hinglish", "expect": "ok", "grounding": ["A one-time late fee of Rs 100 is added."], "customer_text": "", "known_text": ""}
+{"id": "ok_grounded_no_fee_en", "text": "As per our policy, we do not add any late fee or penalty.", "lang": "en", "expect": "ok", "grounding": ["This assistant does not add any late fee, penalty or interest."], "customer_text": "", "known_text": ""}
+{"id": "ok_hinglish_plain", "text": "Haan ji, main link abhi bhej deti hoon. Aap kab tak payment kar paayenge?", "lang": "hinglish", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_hindi_plain", "text": "ठीक है, मैं आपको लिंक भेज देती हूँ। आप कब तक भुगतान कर पाएँगे?", "lang": "hi", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_english_plain", "text": "Sure, I can send the payment link now. By when could you pay?", "lang": "en", "expect": "ok", "grounding": [], "customer_text": "", "known_text": ""}
+{"id": "ok_known_text_number", "text": "Last time you said you would pay by the 8th.", "lang": "en", "expect": "ok", "grounding": [], "customer_text": "", "known_text": "promised to pay by the 8th"}
+{"id": "ok_hinglish_in_hinglish_call", "text": "Hamari policy ke mutabiq koi late fee nahi lagta.", "lang": "hinglish", "expect": "ok", "grounding": ["late fee"], "customer_text": "", "known_text": ""}

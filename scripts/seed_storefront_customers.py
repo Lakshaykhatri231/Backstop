@@ -27,6 +27,7 @@ from app.database import Base, engine, SessionLocal
 from app.models import Customer, Order, OrderStatus, FailureReason, CartEvent, CartEventType, AgentAction
 from app.auth import hash_password
 from app.tiering import refresh_tier
+from app import contacts
 
 DEMO_PASSWORD = "password123"
 
@@ -48,6 +49,32 @@ def make_customer(db, email, name):
     db.commit()
     db.refresh(customer)
     return customer
+
+
+# Demo phones are fixed fictional numbers. The seed gives each demo customer a
+# VERIFIED number (a real signup would have passed an OTP), and ticks consent
+# for exactly one of them - labelled "seed-demo" - so the voice demo has one
+# callable customer and the rest show the "verified, no consent" state.
+# Seeded consent is demo data, not something the app can ever create itself.
+DEMO_CONTACTS = {
+    "priya@demo.com": ("+919000000001", "hinglish", True),
+    "arjun@demo.com": ("+919000000002", "en", False),
+    "neha@demo.com": ("+919000000003", "hi", False),
+    "rahul@demo.com": ("+919000000004", "hinglish", False),
+    "zara@demo.com": ("+919000000005", "hinglish", False),
+}
+
+
+def seed_contact(db, customer):
+    phone, language, consent = DEMO_CONTACTS[customer.email]
+    cp = contacts.upsert_contact(db, customer_id=customer.id, phone=phone, language=language,
+                                 verified_now=True)
+    if consent and not cp.voice_consent:
+        cp.voice_consent = True
+        cp.consent_at = datetime.utcnow()
+        cp.consent_source = "customer_ticked"
+        cp.consent_text_version = "seed-demo"
+        db.commit()
 
 
 def make_order(db, customer, amount_inr, status, failure_reason=None, days_back=0):
@@ -95,6 +122,7 @@ def seed():
         make_order(db, priya, random.choice([1499, 2499, 3999, 5999]), OrderStatus.CAPTURED, days_back=50 - i * 6)
     make_order(db, priya, 3999, OrderStatus.FAILED, FailureReason.CARD_EXPIRED, days_back=8)
     refresh_tier(db, priya)
+    seed_contact(db, priya)
     print(f"  ✓ priya@demo.com -> tier: {priya.tier.value}")
 
     # 2. Arjun - standard: 3 orders, 2 captured, 1 failed
@@ -103,6 +131,7 @@ def seed():
     make_order(db, arjun, 2499, OrderStatus.CAPTURED, days_back=15)
     make_order(db, arjun, 1499, OrderStatus.FAILED, FailureReason.INSUFFICIENT_FUNDS, days_back=4)
     refresh_tier(db, arjun)
+    seed_contact(db, arjun)
     print(f"  ✓ arjun@demo.com -> tier: {arjun.tier.value}")
 
     # 3. Neha - risk: 5 orders, 1 captured, 4 failed (2x risk_block)
@@ -113,11 +142,13 @@ def seed():
     make_order(db, neha, 1499, OrderStatus.FAILED, FailureReason.INSUFFICIENT_FUNDS, days_back=6)
     make_order(db, neha, 899, OrderStatus.FAILED, FailureReason.INSUFFICIENT_FUNDS, days_back=2)
     refresh_tier(db, neha)
+    seed_contact(db, neha)
     print(f"  ✓ neha@demo.com -> tier: {neha.tier.value}")
 
     # 4. Rahul - new: no order history at all
     rahul = make_customer(db, "rahul@demo.com", "Rahul Iyer")
     refresh_tier(db, rahul)
+    seed_contact(db, rahul)
     print(f"  ✓ rahul@demo.com -> tier: {rahul.tier.value}")
 
     # 5. Zara - standard, but a serial-canceller: 3 captured orders + 3 explicit cancels
@@ -126,6 +157,7 @@ def seed():
     make_order(db, zara, 2499, OrderStatus.CAPTURED, days_back=14)
     make_order(db, zara, 899, OrderStatus.CAPTURED, days_back=5)
     refresh_tier(db, zara)
+    seed_contact(db, zara)
     make_cancel_event(db, zara, 3999, days_back=20)
     make_cancel_event(db, zara, 5999, days_back=10)
     make_cancel_event(db, zara, 1499, days_back=3)

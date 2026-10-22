@@ -9,6 +9,10 @@ const OUTCOME_TONE: Record<string, Tone> = {
   escalated: "declined",
   no_action_taken: "neutral",
   customer_gave_up: "failed",
+  pre_debit_notice_sent: "loyal",
+  payment_link_sent: "indigo",
+  remandate_link_sent: "indigo",
+  voice_call_placed: "indigo",
 };
 
 export function outcomeTone(outcome: string | null | undefined): Tone {

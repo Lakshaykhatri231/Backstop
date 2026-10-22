@@ -4,6 +4,7 @@ import { useStorefront } from "@/lib/hooks/useStorefront";
 
 import { StoreHeader } from "./StoreHeader";
 import { AccountStatsCard } from "./AccountStatsCard";
+import { ContactCard } from "./ContactCard";
 import { CatalogGrid } from "./CatalogGrid";
 import { CartPanel } from "./CartPanel";
 import { CancelOfferCard } from "./CancelOfferCard";
@@ -54,6 +55,7 @@ export function StorePage() {
       <div className="mx-auto max-w-[1320px] px-6 py-8 grid lg:grid-cols-[1fr_380px] gap-6">
         <div>
           <AccountStatsCard stats={store.me.stats} />
+          <ContactCard contact={store.me.contact} />
           <DemoTutorialCard
             cartEmpty={store.cart.items.length === 0}
             busy={store.busy}

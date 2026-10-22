@@ -13,6 +13,7 @@ export type RevenueState = Record<string, number> & {
   at_risk_soft: number;
   at_risk_declined: number;
   at_risk_failed: number;
+  at_risk_mandate: number;
 };
 
 export type MerchantCustomer = {

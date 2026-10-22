@@ -11,6 +11,10 @@ export const ACTION_TONE: Record<string, Tone> = {
   escalate_to_human: "declined",
   no_action: "neutral",
   rule_default_fallback: "failed",
+  send_pre_debit_notice: "loyal",
+  send_payment_link: "indigo",
+  send_remandate_link: "indigo",
+  voice_call: "indigo",
 };
 
 export const ACTION_LABEL: Record<string, string> = {
@@ -23,6 +27,10 @@ export const ACTION_LABEL: Record<string, string> = {
   escalate_to_human: "Escalated",
   no_action: "No Action",
   rule_default_fallback: "Fallback",
+  send_pre_debit_notice: "Pre-debit Notice",
+  send_payment_link: "Payment Link",
+  send_remandate_link: "Re-mandate Link",
+  voice_call: "Voice Call",
 };
 
 export function actionLabel(action: string | null | undefined): string {

@@ -10,16 +10,26 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AccountRouteImport } from './routes/account'
 import { Route as ArchitectureRouteImport } from './routes/architecture'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as DemoConsoleRouteImport } from './routes/demo-console'
+import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as PayLaterRouteImport } from './routes/pay-later'
 import { Route as StoreRouteImport } from './routes/store'
 import { Route as SupportRouteImport } from './routes/support'
 import { Route as TiersRouteImport } from './routes/tiers'
+import { Route as AccountInvoicesRouteImport } from './routes/account.invoices'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArchitectureRoute = ArchitectureRouteImport.update({
@@ -32,9 +42,24 @@ const DashboardRoute = DashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DemoConsoleRoute = DemoConsoleRouteImport.update({
+  id: '/demo-console',
+  path: '/demo-console',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvoicesRoute = InvoicesRouteImport.update({
+  id: '/invoices',
+  path: '/invoices',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PayLaterRoute = PayLaterRouteImport.update({
+  id: '/pay-later',
+  path: '/pay-later',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StoreRoute = StoreRouteImport.update({
@@ -52,70 +77,109 @@ const TiersRoute = TiersRouteImport.update({
   path: '/tiers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AccountInvoicesRoute = AccountInvoicesRouteImport.update({
+  id: '/invoices',
+  path: '/invoices',
+  getParentRoute: () => AccountRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/account': typeof AccountRouteWithChildren
   '/architecture': typeof ArchitectureRoute
   '/dashboard': typeof DashboardRoute
+  '/demo-console': typeof DemoConsoleRoute
+  '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
+  '/pay-later': typeof PayLaterRoute
   '/store': typeof StoreRoute
   '/support': typeof SupportRoute
   '/tiers': typeof TiersRoute
+  '/account/invoices': typeof AccountInvoicesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account': typeof AccountRouteWithChildren
   '/architecture': typeof ArchitectureRoute
   '/dashboard': typeof DashboardRoute
+  '/demo-console': typeof DemoConsoleRoute
+  '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
+  '/pay-later': typeof PayLaterRoute
   '/store': typeof StoreRoute
   '/support': typeof SupportRoute
   '/tiers': typeof TiersRoute
+  '/account/invoices': typeof AccountInvoicesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/account': typeof AccountRouteWithChildren
   '/architecture': typeof ArchitectureRoute
   '/dashboard': typeof DashboardRoute
+  '/demo-console': typeof DemoConsoleRoute
+  '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
+  '/pay-later': typeof PayLaterRoute
   '/store': typeof StoreRoute
   '/support': typeof SupportRoute
   '/tiers': typeof TiersRoute
+  '/account/invoices': typeof AccountInvoicesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/account'
     | '/architecture'
     | '/dashboard'
+    | '/demo-console'
+    | '/invoices'
     | '/login'
+    | '/pay-later'
     | '/store'
     | '/support'
     | '/tiers'
+    | '/account/invoices'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/account'
     | '/architecture'
     | '/dashboard'
+    | '/demo-console'
+    | '/invoices'
     | '/login'
+    | '/pay-later'
     | '/store'
     | '/support'
     | '/tiers'
+    | '/account/invoices'
   id:
     | '__root__'
     | '/'
+    | '/account'
     | '/architecture'
     | '/dashboard'
+    | '/demo-console'
+    | '/invoices'
     | '/login'
+    | '/pay-later'
     | '/store'
     | '/support'
     | '/tiers'
+    | '/account/invoices'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AccountRoute: typeof AccountRouteWithChildren
   ArchitectureRoute: typeof ArchitectureRoute
   DashboardRoute: typeof DashboardRoute
+  DemoConsoleRoute: typeof DemoConsoleRoute
+  InvoicesRoute: typeof InvoicesRoute
   LoginRoute: typeof LoginRoute
+  PayLaterRoute: typeof PayLaterRoute
   StoreRoute: typeof StoreRoute
   SupportRoute: typeof SupportRoute
   TiersRoute: typeof TiersRoute
@@ -128,6 +192,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/architecture': {
@@ -144,11 +215,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/demo-console': {
+      id: '/demo-console'
+      path: '/demo-console'
+      fullPath: '/demo-console'
+      preLoaderRoute: typeof DemoConsoleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invoices': {
+      id: '/invoices'
+      path: '/invoices'
+      fullPath: '/invoices'
+      preLoaderRoute: typeof InvoicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pay-later': {
+      id: '/pay-later'
+      path: '/pay-later'
+      fullPath: '/pay-later'
+      preLoaderRoute: typeof PayLaterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/store': {
@@ -172,14 +264,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TiersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/account/invoices': {
+      id: '/account/invoices'
+      path: '/invoices'
+      fullPath: '/account/invoices'
+      preLoaderRoute: typeof AccountInvoicesRouteImport
+      parentRoute: typeof AccountRoute
+    }
   }
 }
 
+interface AccountRouteChildren {
+  AccountInvoicesRoute: typeof AccountInvoicesRoute
+}
+
+const AccountRouteChildren: AccountRouteChildren = {
+  AccountInvoicesRoute: AccountInvoicesRoute,
+}
+
+const AccountRouteWithChildren =
+  AccountRoute._addFileChildren(AccountRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AccountRoute: AccountRouteWithChildren,
   ArchitectureRoute: ArchitectureRoute,
   DashboardRoute: DashboardRoute,
+  DemoConsoleRoute: DemoConsoleRoute,
+  InvoicesRoute: InvoicesRoute,
   LoginRoute: LoginRoute,
+  PayLaterRoute: PayLaterRoute,
   StoreRoute: StoreRoute,
   SupportRoute: SupportRoute,
   TiersRoute: TiersRoute,

@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import get_db, SessionLocal
 from app.models import (
     Event, Decision, EventType, FailureReason, AgentAction, Order, OrderStatus,
-    WebhookEventLog, PendingSignal, PendingSignalKind,
+    WebhookEventLog, PendingSignal, PendingSignalKind, ScheduledKind,
 )
 from app.rules_engine import rule_based_decision  # noqa: F401 (used indirectly via llm_agent)
 from app.llm_agent import decide
@@ -21,6 +21,9 @@ from app.revenue import adjust as adjust_revenue, record_capture_revenue, resolv
 from app.tiering import refresh_tier
 from app.storefront import _items_match
 from app import runtime_flags
+from app import mandate
+from app import autopay, contacts, payment_links, receivables
+from app.scheduler import schedule
 
 router = APIRouter()
 
@@ -100,6 +103,16 @@ def _handle_payment_captured(db: Session, inner_payload: dict) -> dict:
     payment_entity = inner_payload.get("payment", {}).get("entity", {})
     razorpay_order_id = payment_entity.get("order_id")
     amount_inr = (payment_entity.get("amount", 0) or 0) / 100.0
+
+    # A Payment Link or card-mandate payment is one of OUR flows, not an
+    # "unmatched" storefront capture: route it so it is booked exactly once
+    # and by the right subject (app/payment_links.py, app/autopay.py).
+    kind, link = payment_links.classify_payment(db, payment_entity)
+    if link is not None:
+        return payment_links.apply_payment(db, link, amount_inr, payment_entity.get("id"),
+                                           source="payment.captured")
+    if kind in autopay.PAYMENT_KINDS:
+        return autopay.handle_payment_captured(db, kind, payment_entity)
 
     order = (
         db.query(Order).filter(Order.razorpay_order_id == razorpay_order_id).first()
@@ -224,6 +237,7 @@ def _sync_storefront_order_failed(db: Session, event: Event) -> None:
             resolve_cart_to_failed_thread(db, order)
         # Book the risk, leave it open.
         adjust_revenue(db, "at_risk_failed", event.amount_inr, reason="payment_failed", order_id=razorpay_order_id)
+        _schedule_failed_order_call(db, order)
     else:
         # A retry: the money is already tracked by the carrier. Mark this
         # try settled immediately so it can never be mistaken for a
@@ -240,6 +254,23 @@ def _sync_storefront_order_failed(db: Session, event: Event) -> None:
                 "reason": "retry of a purchase whose at-risk is already carried by an earlier open failure",
             },
         )
+
+
+def _schedule_failed_order_call(db: Session, order: Order) -> None:
+    """Queue ONE follow-up call about a failed payment (never a cart), only
+    for orders worth a call and only when we hold a number for the customer.
+    Whether it actually rings is re-judged when it fires - the order may have
+    been paid by then, and consent may have been given or withdrawn."""
+    if order.amount_inr < runtime_flags.get_voice_min_order_value():
+        return
+    cp = contacts.for_customer(db, order.customer_id)
+    if cp is None or not cp.phone:
+        return
+    schedule(
+        db, ScheduledKind.VOICE_CALL, "order", order.id,
+        datetime.utcnow() + timedelta(hours=runtime_flags.get_voice_failed_order_wait_hours()),
+        payload={"razorpay_order_id": order.razorpay_order_id}, customer_ref=cp.id,
+    )
 
 
 def _open_run_carrier(db: Session, order: Order) -> Order | None:
@@ -342,6 +373,12 @@ def _process_decision_and_action(event_id: str) -> None:
     try:
         event = db.query(Event).filter(Event.id == event_id).first()
         if not event:
+            return
+
+        if event.event_type in mandate.MANDATE_EVENT_TYPES:
+            # Recurring-debit failures get a dated retry plan, not the
+            # one-off "retry now" ladder. Rules-only by design (mandate.py).
+            mandate.process_mandate_event(db, event)
             return
 
         result = decide(
@@ -460,8 +497,6 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks, 
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Malformed JSON payload")
 
-    raw_event_name = payload.get("event", "")
-
     # Razorpay's unique event ID lives in the X-Razorpay-Event-Id header - NOT
     # in payload["event"], which is only the event TYPE (e.g. "payment.failed")
     # and is identical across every delivery of that event type. Using it as
@@ -472,7 +507,15 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks, 
     razorpay_event_id = request.headers.get("X-Razorpay-Event-Id")
     if not razorpay_event_id:
         razorpay_event_id = "bodyhash:" + hashlib.sha256(raw_body).hexdigest()
+    return deliver_event(db, payload, raw_body, razorpay_event_id, background_tasks)
 
+
+def deliver_event(db: Session, payload: dict, raw_body: bytes, razorpay_event_id: str,
+                  background_tasks: BackgroundTasks):
+    """Everything after the signature check: dedupe, route, decide. The Demo
+    Console reaches it too (app/demo.py `simulate_razorpay_event`) to play a
+    Razorpay result that Test Mode cannot produce, through exactly this code."""
+    raw_event_name = payload.get("event", "")
     existing = db.query(WebhookEventLog).filter(
         WebhookEventLog.razorpay_event_id == razorpay_event_id
     ).first()
@@ -501,6 +544,27 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks, 
         write_audit_entry(db, action_type="payment_authorized", details=payload.get("payload", {}))
         return {"status": "acknowledged", "event": "payment.authorized"}
 
+    if raw_event_name == "subscription.charged":
+        # A successful recurring debit, not a failure: it must never get a
+        # failure Event/Decision (it used to, and was told to "retry"). It
+        # closes the open mandate run, if any. Revenue itself is booked by the
+        # payment.captured that accompanies it. See app/mandate.py.
+        return mandate.handle_subscription_charged(db, payload.get("payload", {}))
+
+    if raw_event_name.startswith("payment_link."):
+        # Every link we hand out is in the registry (app/payment_links.py):
+        # invoices, failed storefront orders, failed mandate runs. Links made
+        # before the registry existed only live on the invoice row (legacy).
+        result = payment_links.handle_event(db, raw_event_name, payload.get("payload", {}))
+        if result.get("status") == "unmatched" and raw_event_name in ("payment_link.paid",
+                                                                      "payment_link.partially_paid"):
+            return receivables.handle_payment_link_event(db, raw_event_name, payload.get("payload", {}))
+        return result
+
+    if raw_event_name.startswith("token."):
+        # Card mandates we debit ourselves: confirmed / rejected / cancelled / paused.
+        return autopay.handle_token_event(db, raw_event_name, payload.get("payload", {}))
+
     event_type = _map_event_type(raw_event_name)
     if event_type is None:
         # Unrecognized event type - not an error, just nothing for us to act on.
@@ -509,6 +573,31 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks, 
     inner_payload = payload.get("payload", {})
     payment_entity = inner_payload.get("payment", {}).get("entity", {})
     sub_entity = inner_payload.get("subscription", {}).get("entity", {})
+
+    if event_type == EventType.PAYMENT_FAILED:
+        kind, link = payment_links.classify_payment(db, payment_entity)
+        if link is not None or kind in ("invoice", "order", "mandate_run"):
+            # A failed attempt on one of our Payment Links: the customer can
+            # simply try again on the same link. It is NOT a new storefront
+            # failure - it used to become a consumer Event + Decision and skew
+            # the failure analytics.
+            write_audit_entry(db, "payment_link_attempt_failed", {
+                "payment_id": payment_entity.get("id"), "subject_type": kind,
+                "payment_link_row": link.id if link else None,
+                "error_reason": payment_entity.get("error_reason")})
+            return {"status": "processed", "payment_link_attempt_failed": True}
+        if kind == "mandate_auth":
+            write_audit_entry(db, "mandate_authorisation_failed", {
+                "payment_id": payment_entity.get("id"), "error_reason": payment_entity.get("error_reason")})
+            return {"status": "processed", "mandate_authorisation_failed": True}
+        if kind == "mandate_debit":
+            # A debit WE triggered on a card mandate failed: it opens (or
+            # advances) a MandateRun exactly like subscription.pending, so it
+            # gets the same notices, voice call, promise and sweep. The token
+            # id plays the subscription id (see MandateRun.mandate_id).
+            event_type = EventType.SUBSCRIPTION_PENDING
+            sub_entity = {"id": autopay.token_of(payment_entity),
+                          "customer_id": payment_entity.get("customer_id")}
 
     failure_reason = _classify_failure_reason(payment_entity or sub_entity)
     error_fields = _extract_error_fields(payment_entity or sub_entity)

@@ -420,3 +420,256 @@ def rule_based_cart_event_decision(
         "and not currently incentive-eligible (tier gate, order-value cap, "
         "or 30-day frequency cap), so a straightforward reminder is sent.",
     )
+
+
+# ── Mandate (recurring-debit) retry planning ─────────────────────────────────
+#
+# Pure and deterministic: no DB, no clock, no runtime_flags reads - the caller
+# passes `now` and the caps in, so this stays independently readable/testable
+# like the rest of this module. The LLM never touches it (same rule as the
+# cart-event path): retry DATES are policy, not something to be generated.
+#
+# Who owns retries matters. For Razorpay Subscriptions Razorpay itself retries
+# and sends subscription.pending / .halted; this plan then only decides
+# communications (pre-debit notice, re-mandate link) and when to give up. For a
+# merchant-driven debit on a stored mandate/token the merchant owns the retry
+# timing, which is what `retry_at` is for.
+
+from datetime import datetime, timedelta  # noqa: E402  (kept next to its only user)
+import calendar as _calendar  # noqa: E402
+
+_IST = timedelta(hours=5, minutes=30)
+_RETRY_HOUR_IST = 10
+# Indian salary credits cluster around the start of the month, so an
+# insufficient-funds debit is retried on the 1st/5th/7th and on the last
+# working day, at ~10:00 IST (after overnight bank batch credits post).
+_SALARY_DAYS = (1, 5, 7)
+# RBI requires a pre-debit notification at least 24h before a recurring debit,
+# and Razorpay's UPI Autopay flow debits at the 25th hour after the notice. RBI
+# is silent on whether a retry is a "new" debit and the only source that
+# allows silent retries caps them at two - so every retry is treated as a
+# fresh debit: it is NEVER scheduled less than notice + 1h out, and it always
+# has its notice. (Slower for a transient glitch by about a day; cheap on a
+# monthly cycle, and it keeps us on the safe side of an ambiguous rule.)
+MANDATE_NOTICE_LEAD = timedelta(hours=24)
+MANDATE_MIN_RETRY_GAP = MANDATE_NOTICE_LEAD + timedelta(hours=1)
+# Card mandates debited by US through Razorpay's recurring API (app/autopay.py):
+# the debit order carries a `notification`, Razorpay sends the bank pre-debit
+# notice when that order is created and refuses the debit for 36h05m after it
+# (BAD_REQUEST_MANDATE_PROMISED_DEBIT_DATE_NOT_HONOURED). +55 min buffer so a
+# scheduler tick never lands inside the window. Hardcoded like the IST contact
+# window - it is the processor's rule, not a merchant knob.
+CARD_TOKEN_DEBIT_LEAD = timedelta(hours=37)
+
+
+def _ten_am_ist_at_or_after(earliest: datetime) -> datetime:
+    """First 10:00 IST (as naive UTC) at or after `earliest`."""
+    ist = earliest + _IST
+    slot = ist.replace(hour=_RETRY_HOUR_IST, minute=0, second=0, microsecond=0)
+    if slot < ist:
+        slot += timedelta(days=1)
+    return slot - _IST
+
+
+def _ist_10am_as_utc(year: int, month: int, day: int) -> datetime:
+    return datetime(year, month, day, _RETRY_HOUR_IST, 0) - _IST
+
+
+def _last_weekday_of_month(year: int, month: int) -> int:
+    day = _calendar.monthrange(year, month)[1]
+    while datetime(year, month, day).weekday() >= 5:   # Sat/Sun
+        day -= 1
+    return day
+
+
+def next_salary_cycle_retry(now: datetime, earliest: datetime) -> datetime:
+    """First salary-cycle slot at or after `earliest` (naive UTC in and out)."""
+    base = now + _IST
+    candidates: list[datetime] = []
+    for offset in range(0, 3):                     # this month + the next two
+        month_index = base.month - 1 + offset
+        year, month = base.year + month_index // 12, month_index % 12 + 1
+        days = {*_SALARY_DAYS, _last_weekday_of_month(year, month)}
+        candidates += [_ist_10am_as_utc(year, month, d) for d in sorted(days)]
+    return min(c for c in candidates if c >= earliest)
+
+
+def rule_based_mandate_plan(
+    failure_reason: FailureReason,
+    attempts_made: int,
+    opened_at: datetime,
+    now: datetime,
+    max_retries: int,
+    window_days: int,
+    halted: bool = False,
+    min_gap: timedelta = MANDATE_MIN_RETRY_GAP,
+) -> dict:
+    """Plan the next step for a failed recurring debit.
+
+    `min_gap` is the earliest a retry may land after `now`: the 25h notice
+    floor by default, CARD_TOKEN_DEBIT_LEAD for a card mandate we debit
+    ourselves (the bigger of the two always wins - never below 25h).
+
+    `attempts_made` counts failures so far including the original one, so
+    `max_retries` retries means the original + max_retries failed attempts
+    exhaust the run (attempts_made > max_retries).
+
+    Returns {action, confidence, reasoning, retry_at, notice_at, terminal}
+    (when a retry is planned, notice_at is always set and retry_at is always
+    at least 25h after `now`)
+    where `terminal` is None (a retry is planned) or one of
+    "remandate" / "exhausted" / "escalate" (no retry will ever be planned).
+    """
+    min_gap = max(min_gap, MANDATE_MIN_RETRY_GAP)
+
+    def _result(action, confidence, reasoning, terminal=None, retry_at=None, notice_at=None):
+        return {"action": action, "confidence": confidence, "reasoning": reasoning,
+                "terminal": terminal, "retry_at": retry_at, "notice_at": notice_at}
+
+    if halted:
+        return _result(
+            AgentAction.SEND_REMANDATE_LINK, 0.90,
+            "Subscription halted after repeated failures - the mandate can no longer "
+            "be debited. Sending a re-mandate link; no further automatic retries.",
+            terminal="remandate",
+        )
+
+    if failure_reason == FailureReason.RISK_BLOCK:
+        return _result(
+            AgentAction.ESCALATE_TO_HUMAN, 0.85,
+            "Debit was risk-blocked. Retrying a fraud-flagged mandate is unsafe, not "
+            "just unhelpful - human review required.",
+            terminal="escalate",
+        )
+
+    if failure_reason in (FailureReason.CARD_EXPIRED, FailureReason.INVALID_CARD,
+                          FailureReason.CANCELLED):
+        return _result(
+            AgentAction.SEND_REMANDATE_LINK, 0.90,
+            f"Mandate/instrument is no longer usable ({failure_reason.value}); no retry "
+            "can succeed. Asking the customer to register a new mandate.",
+            terminal="remandate",
+        )
+
+    if attempts_made > max_retries:
+        return _result(
+            AgentAction.ESCALATE_TO_HUMAN, 0.95,
+            f"{attempts_made} debit attempts failed (cap is {max_retries} retries after "
+            "the original). Stopping automatic retries and handing to a human.",
+            terminal="exhausted",
+        )
+
+    if failure_reason == FailureReason.INSUFFICIENT_FUNDS:
+        retry_at = next_salary_cycle_retry(now, earliest=now + min_gap)
+        why = ("Insufficient funds: retrying on the next salary-cycle slot "
+               f"({retry_at.isoformat()}Z, ~10:00 IST) rather than hammering the account.")
+    else:
+        # Bank/network/authentication/unknown: usually transient, so retry at
+        # the first morning slot that still leaves a full notice period -
+        # i.e. "next day, 25 hours or more", never a same-day retry.
+        retry_at = _ten_am_ist_at_or_after(now + min_gap)
+        why = (f"Likely transient ({failure_reason.value}): retrying at the next morning "
+               f"slot after the {int(min_gap.total_seconds() // 3600)}h notice "
+               f"period ({retry_at.isoformat()}Z, ~10:00 IST).")
+
+    deadline = opened_at + timedelta(days=window_days)
+    if retry_at > deadline:
+        # No ideal slot fits the window (e.g. a mid-month insufficient-funds
+        # failure with a short window). Don't escalate on the FIRST failure
+        # for that: give the account its best remaining chance with one retry
+        # at ~10:00 IST on the window's last day, if that is still far enough
+        # out to notify. Only then is the cycle genuinely out of road.
+        d = deadline + _IST
+        last_slot = _ist_10am_as_utc(d.year, d.month, d.day)
+        if last_slot < now + min_gap:
+            return _result(
+                AgentAction.ESCALATE_TO_HUMAN, 0.90,
+                f"Next retry ({retry_at.date()}) falls outside the {window_days}-day retry "
+                "window for this cycle and there is no time left to notify before the "
+                "window closes. Handing to a human.",
+                terminal="exhausted",
+            )
+        retry_at = last_slot
+        why += (f" No slot fits the {window_days}-day window, so using its last day "
+                f"({retry_at.isoformat()}Z).")
+
+    # Always present: retry_at >= now + 25h, so the notice time is in the future.
+    notice_at = retry_at - MANDATE_NOTICE_LEAD
+    confidence = 0.80 if failure_reason == FailureReason.INSUFFICIENT_FUNDS else 0.60
+    return _result(AgentAction.RETRY_LATER, confidence, why, retry_at=retry_at, notice_at=notice_at)
+
+
+# ── Promise-to-pay validation ────────────────────────────────────────────────
+
+def validate_promise(
+    promised_date,            # datetime.date
+    today,                    # datetime.date (IST "today", passed in - no clock here)
+    max_days: int,
+    open_promise_exists: bool,
+    broken_count: int,
+    max_broken: int,
+) -> tuple[bool, str, str]:
+    """Deterministic gate for a new promise. Returns (ok, code, reason).
+
+    The date can come from a customer, a merchant or an LLM-parsed voice
+    transcript - this is the single place it is judged, so a model-extracted
+    date can never create a promise that a human-entered one couldn't."""
+    if broken_count >= max_broken:
+        return (False, "too_many_broken",
+                f"{broken_count} promises on this debt were already broken (limit "
+                f"{max_broken}); no further promises accepted - needs a human.")
+    if open_promise_exists:
+        return False, "already_open", "There is already an open promise on this debt."
+    if promised_date <= today:
+        return False, "date_not_in_future", "A promise must be for a future date."
+    if (promised_date - today).days > max_days:
+        return (False, "date_too_far",
+                f"Promised date is more than {max_days} days away, beyond the allowed horizon.")
+    return True, "ok", "Promise accepted."
+
+
+# ── B2B receivables chase ladder ─────────────────────────────────────────────
+
+# Action per ladder position; the position after these is the human handoff.
+RECEIVABLE_LADDER = (
+    (AgentAction.SEND_REMINDER, "courtesy_reminder"),
+    (AgentAction.SEND_PAYMENT_LINK, "payment_link_email"),
+    (AgentAction.SEND_PAYMENT_LINK, "email_and_sms"),
+    (AgentAction.VOICE_CALL, "voice_call"),
+)
+ESCALATE_STEP = len(RECEIVABLE_LADDER)
+
+
+def rule_based_receivable_decision(
+    step: int,
+    outstanding: float,
+    high_value: float,
+    open_promise: bool,
+    disputed: bool,
+) -> tuple[AgentAction | None, str, str]:
+    """What a chase step does when it FIRES (state is judged at fire time, so
+    a promise or dispute that appeared after scheduling is honoured).
+
+    Returns (action | None, code, reasoning); action None means "do nothing".
+      - paid           : nothing outstanding any more
+      - disputed       : the client disagrees they owe it - automation must
+                         not push; a human decides (ladder stops)
+      - promise_open   : the client gave a date - pause, the promise's own
+                         check restarts the ladder if it is broken
+      - high-value invoices skip the automated voice step and go to a human
+    """
+    if outstanding <= 0.01:
+        return None, "paid", "Nothing outstanding."
+    if disputed:
+        return None, "disputed", "Invoice is disputed - chasing stopped pending human review."
+    if open_promise:
+        return None, "promise_open", "Client has an open promise to pay - ladder paused."
+    if step >= ESCALATE_STEP:
+        return (AgentAction.ESCALATE_TO_HUMAN, "finance_escalation",
+                "Invoice is far past due with no payment - handing to finance.")
+    action, code = RECEIVABLE_LADDER[step]
+    if action == AgentAction.VOICE_CALL and outstanding >= high_value:
+        return (AgentAction.ESCALATE_TO_HUMAN, "high_value_escalation",
+                f"Outstanding ₹{outstanding:,.0f} is at or above the high-value threshold "
+                f"(₹{high_value:,.0f}); a person should call, not an automated voice agent.")
+    return action, code, f"Chase step {step + 1}: {code.replace('_', ' ')}."

@@ -237,6 +237,136 @@ def set_high_value_amount_inr(value: int) -> None:
     _high_value_amount_inr = value
 
 
+# --- Mandate retry sequencer (app/mandate.py) ---
+
+_mandate_max_retries = settings.mandate_max_retries
+_mandate_retry_window_days = settings.mandate_retry_window_days
+
+
+def get_mandate_max_retries() -> int:
+    return _mandate_max_retries
+
+
+def set_mandate_max_retries(value: int) -> None:
+    global _mandate_max_retries
+    _mandate_max_retries = value
+
+
+def get_mandate_retry_window_days() -> int:
+    return _mandate_retry_window_days
+
+
+def set_mandate_retry_window_days(value: int) -> None:
+    global _mandate_retry_window_days
+    _mandate_retry_window_days = value
+
+
+# --- B2B receivables chaser (app/receivables.py) ---
+
+_receivables_chase_offsets_days = settings.receivables_chase_offsets_days
+_receivables_escalate_after_days = settings.receivables_escalate_after_days
+
+
+def get_receivables_chase_offsets() -> list[int]:
+    """Four day-offsets; falls back to the default ladder if the configured
+    string is malformed, rather than silently never chasing."""
+    try:
+        offsets = [int(x) for x in _receivables_chase_offsets_days.split(",")]
+        if len(offsets) == 4:
+            return offsets
+    except ValueError:
+        pass
+    return [-3, 1, 7, 15]
+
+
+def get_receivables_escalate_after_days() -> int:
+    return _receivables_escalate_after_days
+
+
+def set_receivables_escalate_after_days(value: int) -> None:
+    global _receivables_escalate_after_days
+    _receivables_escalate_after_days = value
+
+
+# --- Voice recovery (app/voice.py) ---
+
+_voice_max_attempts_per_subject = settings.voice_max_attempts_per_subject
+
+
+def get_voice_max_attempts_per_subject() -> int:
+    return _voice_max_attempts_per_subject
+
+
+def set_voice_max_attempts_per_subject(value: int) -> None:
+    global _voice_max_attempts_per_subject
+    _voice_max_attempts_per_subject = value
+
+
+# --- Collections insights (app/collections_insights.py) ---
+
+_collections_min_sample = settings.collections_min_sample
+
+
+def get_collections_min_sample() -> int:
+    return _collections_min_sample
+
+
+_voice_min_order_value = settings.voice_min_order_value
+_voice_failed_order_wait_hours = settings.voice_failed_order_wait_hours
+
+
+def get_voice_min_order_value() -> int:
+    return _voice_min_order_value
+
+
+def get_voice_failed_order_wait_hours() -> int:
+    return _voice_failed_order_wait_hours
+
+
+# --- Promise-to-pay (app/promises.py) ---
+
+_promise_max_days_b2c = settings.promise_max_days_b2c
+_promise_max_days_b2b = settings.promise_max_days_b2b
+_promise_max_broken = settings.promise_max_broken
+_promise_grace_days = settings.promise_grace_days
+
+
+def get_promise_max_days_b2c() -> int:
+    return _promise_max_days_b2c
+
+
+def get_promise_max_days_b2b() -> int:
+    return _promise_max_days_b2b
+
+
+def get_promise_max_broken() -> int:
+    return _promise_max_broken
+
+
+def get_promise_grace_days() -> int:
+    return _promise_grace_days
+
+
+def set_promise_max_days_b2c(value: int) -> None:
+    global _promise_max_days_b2c
+    _promise_max_days_b2c = value
+
+
+def set_promise_max_days_b2b(value: int) -> None:
+    global _promise_max_days_b2b
+    _promise_max_days_b2b = value
+
+
+def set_promise_max_broken(value: int) -> None:
+    global _promise_max_broken
+    _promise_max_broken = value
+
+
+def set_promise_grace_days(value: int) -> None:
+    global _promise_grace_days
+    _promise_grace_days = value
+
+
 # --- Tiering: engagement-score model (Tier Analysis) ---
 # Replaces the old success-rate thresholds entirely. See app/tiering.py
 # for why payment success rate is no longer what a tier is made of.
@@ -351,3 +481,33 @@ def get_tier_risk_cancel_rate() -> float:
 def set_tier_risk_cancel_rate(value: float) -> None:
     global _tier_risk_cancel_rate
     _tier_risk_cancel_rate = value
+
+
+# ── Demo Console switches (process-local, reset on restart) ──────────────────
+# Whether the Demo Console lets the simulation spend REAL Razorpay Test Mode
+# payment links. None = not decided (normal behaviour: RAZORPAY_LINKS decides);
+# False = labelled stand-ins only; True = real links (the person's choice).
+_sim_real_links: bool | None = None
+# What a card-mandate debit does in the simulation: None = ask Razorpay for
+# real; "success" | "insufficient_funds" = play that result instead.
+_sim_debit_outcome: str | None = None
+
+
+def get_sim_real_links() -> bool | None:
+    return _sim_real_links
+
+
+def set_sim_real_links(value: bool | None) -> None:
+    global _sim_real_links
+    _sim_real_links = value
+
+
+def get_sim_debit_outcome() -> str | None:
+    return _sim_debit_outcome
+
+
+def set_sim_debit_outcome(value: str | None) -> None:
+    global _sim_debit_outcome
+    if value not in (None, "success", "insufficient_funds"):
+        raise ValueError("outcome must be success, insufficient_funds or None")
+    _sim_debit_outcome = value

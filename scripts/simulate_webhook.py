@@ -128,6 +128,74 @@ SCENARIOS = {
         },
     },
 
+    # ── Recurring-debit (mandate) scenarios - see app/mandate.py ────────────
+    # `pending` + `charged` share sub_test_m01: run `pending` first (opens a
+    # mandate run and schedules a dated retry), then `charged` (closes it as
+    # recovered and releases at_risk_mandate).
+    "pending": {
+        "event": "subscription.pending",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_test_m001",
+                    "amount": 49900,
+                    "customer_id": "cust_test_m01",
+                    "subscription_id": "sub_test_m01",
+                    "error_code": "BAD_REQUEST_ERROR",
+                    "error_reason": "insufficient funds in account",
+                }
+            },
+            "subscription": {"entity": {"id": "sub_test_m01", "payment_attempts": 1}},
+        },
+    },
+    "pending_bank_decline": {
+        "event": "subscription.pending",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_test_m002",
+                    "amount": 79900,
+                    "customer_id": "cust_test_m02",
+                    "subscription_id": "sub_test_m02",
+                    "error_code": "GATEWAY_ERROR",
+                    "error_reason": "transaction declined by issuing bank",
+                }
+            },
+            "subscription": {"entity": {"id": "sub_test_m02", "payment_attempts": 1}},
+        },
+    },
+    "charged": {
+        "event": "subscription.charged",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_test_m003",
+                    "amount": 49900,
+                    "customer_id": "cust_test_m01",
+                    "subscription_id": "sub_test_m01",
+                }
+            },
+            "subscription": {"entity": {"id": "sub_test_m01", "payment_attempts": 2}},
+        },
+    },
+    # Mandate no longer usable: no retry can succeed, so the plan is a
+    # re-mandate link instead of a retry.
+    "revoked": {
+        "event": "subscription.pending",
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_test_m004",
+                    "amount": 29900,
+                    "customer_id": "cust_test_m03",
+                    "subscription_id": "sub_test_m03",
+                    "error_code": "BAD_REQUEST_ERROR",
+                    "error_reason": "mandate cancelled by customer",
+                }
+            },
+            "subscription": {"entity": {"id": "sub_test_m03", "payment_attempts": 1}},
+        },
+    },
 }
 
 

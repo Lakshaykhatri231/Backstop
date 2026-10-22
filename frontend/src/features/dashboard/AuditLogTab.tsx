@@ -8,12 +8,14 @@ import { AuditLogTable } from "./components/AuditLogTable";
 import { IncentiveAnalysisModal } from "./modals/IncentiveAnalysisModal";
 import { RecoveryAnalysisModal } from "./modals/RecoveryAnalysisModal";
 import { TierAnalysisModal } from "./modals/TierAnalysisModal";
+import { CollectionsAnalysisModal } from "./modals/CollectionsAnalysisModal";
 
 export function AuditLogTab() {
   const auditLogQ = useAuditLog(100);
   const [showIncentive, setShowIncentive] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
   const [showTier, setShowTier] = useState(false);
+  const [showCollections, setShowCollections] = useState(false);
   const [chain, setChain] = useState<AuditVerifyResult | null>(null);
   const verifyMutation = useMutation({ mutationFn: getAuditVerify, onSuccess: setChain });
 
@@ -29,6 +31,9 @@ export function AuditLogTab() {
         </button>
         <button onClick={() => setShowTier(true)} className="rounded-md px-3.5 py-1.5 text-xs font-semibold bg-loyal/15 text-loyal">
           🎯 Tier Analysis
+        </button>
+        <button onClick={() => setShowCollections(true)} className="rounded-md px-3.5 py-1.5 text-xs font-semibold bg-indigo/15 text-indigo">
+          🧾 Collections Analysis
         </button>
         <button
           onClick={() => verifyMutation.mutate()}
@@ -47,6 +52,7 @@ export function AuditLogTab() {
       <IncentiveAnalysisModal open={showIncentive} onOpenChange={setShowIncentive} />
       <RecoveryAnalysisModal open={showRecovery} onOpenChange={setShowRecovery} />
       <TierAnalysisModal open={showTier} onOpenChange={setShowTier} />
+      <CollectionsAnalysisModal open={showCollections} onOpenChange={setShowCollections} />
 
       <div className="rounded-2xl bg-white border border-ink/5 p-6 shadow-[0_20px_40px_-30px_rgba(234,88,12,0.4)]">
         {auditLogQ.data ? <AuditLogTable log={auditLogQ.data} /> : <div className="text-ink/40 text-sm py-10 text-center">Loading…</div>}

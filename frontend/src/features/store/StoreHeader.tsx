@@ -19,6 +19,7 @@ export function StoreHeader({ customer, onLogout }: { customer: Customer; onLogo
           <span className="font-display font-semibold text-lg tracking-tight">Backstop Store</span>
         </Link>
         <div className="flex-1" />
+        <Link to="/account" className="text-sm text-ink/70 hover:text-ink underline-offset-2 hover:underline">Autopay</Link>
         <span className="text-sm text-ink/60">{customer.name}</span>
         <span
           className={`text-xs font-medium px-2.5 py-1 rounded-full ${TIER_BADGE[customer.tier] ?? "bg-ink/5 text-ink/70"}`}

@@ -3,6 +3,7 @@ import { useCartEvents, useCustomers, useRevenue } from "@/lib/hooks/useDashboar
 import { StatCard } from "./components/StatCard";
 import { CustomersTable } from "./components/CustomersTable";
 import { CartEventsTable } from "./components/CartEventsTable";
+import { DuplicatePayments } from "./components/DuplicatePayments";
 
 function fmtInr(n: number) {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
@@ -23,12 +24,14 @@ export function RevenueCustomersTab() {
 
   return (
     <div>
+      <DuplicatePayments />
       <div className="rounded-2xl bg-white border border-ink/5 p-6 shadow-[0_20px_40px_-30px_rgba(234,88,12,0.4)] mb-4">
         <div className="flex flex-wrap justify-around gap-4">
           <StatCard label="Total Revenue" value={fmtInr(revenue.total_revenue)} tone="soft" />
           <StatCard label="At Risk (real recovery targets)" value={fmtInr(revenue.at_risk_soft)} tone="declined" />
           <StatCard label="At Risk (declined carts)" value={fmtInr(revenue.at_risk_declined)} />
           <StatCard label="At Risk (failed payments)" value={fmtInr(revenue.at_risk_failed)} tone="failed" />
+          <StatCard label="At Risk (failed recurring debits)" value={fmtInr(revenue.at_risk_mandate)} tone="declined" />
           <StatCard label="Recovered" value={fmtInr(revenue.total_recovered)} tone="indigo" />
           <StatCard label="Lost" value={fmtInr(revenue.total_lost)} tone="failed" />
           {recoveryPct !== null && <StatCard label="Recovery Rate" value={`${recoveryPct}%`} />}

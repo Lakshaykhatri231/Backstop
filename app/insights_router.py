@@ -37,6 +37,13 @@ from app.tier_insights_llm import (
     RATE_PARAMS as TIER_RATE_PARAMS,
     FLOAT_PARAMS as TIER_FLOAT_PARAMS,
 )
+from app.collections_insights import build_analysis_input as build_collections_analysis_input
+from app.collections_insights_llm import (
+    generate_recommendations as generate_collections_recommendations,
+    CollectionsInsightsLLMError,
+    VALID_PARAMS as COLLECTIONS_PARAMS,
+    PARAM_BOUNDS as COLLECTIONS_BOUNDS,
+)
 from app.tiering import refresh_tier, compute_tier, ENGAGEMENT_WEIGHTS
 from app.models import Customer
 
@@ -102,6 +109,30 @@ _NUMERIC_PARAMS = {
     ),
     "high_value_amount_inr": (
         runtime_flags.get_high_value_amount_inr, runtime_flags.set_high_value_amount_inr,
+    ),
+    "mandate_max_retries": (
+        runtime_flags.get_mandate_max_retries, runtime_flags.set_mandate_max_retries,
+    ),
+    "mandate_retry_window_days": (
+        runtime_flags.get_mandate_retry_window_days, runtime_flags.set_mandate_retry_window_days,
+    ),
+    "promise_max_days_b2c": (
+        runtime_flags.get_promise_max_days_b2c, runtime_flags.set_promise_max_days_b2c,
+    ),
+    "promise_max_days_b2b": (
+        runtime_flags.get_promise_max_days_b2b, runtime_flags.set_promise_max_days_b2b,
+    ),
+    "promise_grace_days": (
+        runtime_flags.get_promise_grace_days, runtime_flags.set_promise_grace_days,
+    ),
+    "promise_max_broken": (
+        runtime_flags.get_promise_max_broken, runtime_flags.set_promise_max_broken,
+    ),
+    "voice_max_attempts_per_subject": (
+        runtime_flags.get_voice_max_attempts_per_subject, runtime_flags.set_voice_max_attempts_per_subject,
+    ),
+    "receivables_escalate_after_days": (
+        runtime_flags.get_receivables_escalate_after_days, runtime_flags.set_receivables_escalate_after_days,
     ),
     "tier_loyal_score": (
         runtime_flags.get_tier_loyal_score, runtime_flags.set_tier_loyal_score,
@@ -169,6 +200,20 @@ _ORDERED_PAIRS = [
     ("incentive_max_order_value_regular", "incentive_max_order_value_loyal",
      runtime_flags.get_incentive_max_order_value_regular, runtime_flags.get_incentive_max_order_value_loyal,
      "regular's amount cap must stay at or below loyal's"),
+    # Collections: the grace period before a promise is called broken must be
+    # shorter than the horizon a promise may reach, and a business may be
+    # given at least as long a horizon as a consumer.
+    ("promise_grace_days", "promise_max_days_b2c",
+     runtime_flags.get_promise_grace_days, runtime_flags.get_promise_max_days_b2c,
+     "promise_grace_days must stay at or below promise_max_days_b2c"),
+    ("promise_max_days_b2c", "promise_max_days_b2b",
+     runtime_flags.get_promise_max_days_b2c, runtime_flags.get_promise_max_days_b2b,
+     "promise_max_days_b2c must stay at or below promise_max_days_b2b"),
+    # The human-escalation day cannot come before the last automated chase step.
+    ("receivables_last_chase_offset_days", "receivables_escalate_after_days",
+     lambda: max(runtime_flags.get_receivables_chase_offsets()),
+     runtime_flags.get_receivables_escalate_after_days,
+     "receivables_escalate_after_days must stay at or after the last automated chase step"),
 ]
 
 
@@ -189,7 +234,8 @@ def _check_ordering(param: str, parsed) -> None:
                 "Rejected to avoid an inverted tier ladder.",
             )
 
-_ALL_VALID_PARAMS = set(INCENTIVE_PARAMS) | set(RECOVERY_PARAMS) | set(TIER_PARAMS)
+_ALL_VALID_PARAMS = (set(INCENTIVE_PARAMS) | set(RECOVERY_PARAMS) | set(TIER_PARAMS)
+                     | set(COLLECTIONS_PARAMS))
 
 
 @router.get("/insights/incentive-analysis")
@@ -304,6 +350,59 @@ def recovery_analysis(range: str = "30d", db: Session = Depends(get_db)):
         **analysis_input,
         "summary": summary,
         "recommendations": recommendations,
+        "llm_error": llm_error,
+        "audit_sequence_num": entry.sequence_num,
+    }
+
+
+@router.get("/insights/collections-analysis")
+def collections_analysis(range: str = "30d", db: Session = Depends(get_db)):
+    """
+    Fourth analysis, same shape as the other three: aggregate (pure) -> LLM
+    recommends -> audited -> apply via /insights/apply-suggestion. Covers
+    failed recurring debits, promises to pay, voice calls and B2B receivables.
+    Every whitelisted setting is paired with the metric that is its evidence,
+    and a recommendation is dropped (in code, not by prompt) when that
+    metric has fewer resolved cases than collections_min_sample.
+    """
+    if range not in RANGE_PRESETS:
+        raise HTTPException(400, f"range must be one of {list(RANGE_PRESETS)}")
+
+    analysis_input = build_collections_analysis_input(db, range)
+
+    summary = ""
+    recommendations: list[dict] = []
+    dropped: list[str] = []
+    llm_error = None
+    try:
+        result = generate_collections_recommendations(analysis_input)
+        summary = result["summary"]
+        recommendations = result["recommendations"]
+        dropped = result.get("dropped_for_insufficient_evidence", [])
+    except CollectionsInsightsLLMError as e:
+        llm_error = str(e)
+
+    entry = write_audit_entry(
+        db,
+        action_type="collections_policy_recommendation_generated",
+        details={
+            "range": analysis_input["range"],
+            "min_sample": analysis_input["min_sample"],
+            "config_snapshot": analysis_input["config_snapshot"],
+            "evidence": analysis_input["evidence"],
+            "patterns": analysis_input["patterns"],
+            "summary": summary,
+            "recommendations": recommendations,
+            "dropped_for_insufficient_evidence": dropped,
+            "llm_error": llm_error,
+        },
+    )
+
+    return {
+        **analysis_input,
+        "summary": summary,
+        "recommendations": recommendations,
+        "dropped_for_insufficient_evidence": dropped,
         "llm_error": llm_error,
         "audit_sequence_num": entry.sequence_num,
     }
@@ -466,9 +565,15 @@ def apply_suggestion(req: ApplySuggestionRequest, db: Session = Depends(get_db))
             )
         floor = 1 if req.param in (
             "tier_min_attempts_for_loyal", "tier_min_attempts_for_regular", "tier_risk_min_attempts",
+            "mandate_retry_window_days", "promise_max_days_b2c", "promise_max_days_b2b",
+            "promise_max_broken", "voice_max_attempts_per_subject", "receivables_escalate_after_days",
         ) else 0
         if parsed < floor:
             raise HTTPException(400, f"suggested_value must be >= {floor}")
+        if req.param in COLLECTIONS_BOUNDS:
+            lo, hi = COLLECTIONS_BOUNDS[req.param]
+            if not (lo <= parsed <= hi):
+                raise HTTPException(400, f"{req.param} must be between {lo} and {hi}")
         if req.param in ("tier_loyal_score", "tier_regular_score") and not (0 <= parsed <= 100):
             raise HTTPException(400, f"{req.param} is a 0-100 engagement score")
         _check_ordering(req.param, parsed)

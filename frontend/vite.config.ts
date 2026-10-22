@@ -30,6 +30,18 @@ export default defineConfig({
       "/audit": BACKEND,
       "/insights": BACKEND,
       "/debug": BACKEND,
+      "/promises": BACKEND,
+      "/receivables": BACKEND,
+      "/autopay": BACKEND,
+      "/payment-links": BACKEND,
+      "/biz": BACKEND,
+      "/voice": BACKEND,
+      "/contacts": BACKEND,
+      "/self-serve": BACKEND,
+      "/me": BACKEND,
+      "/knowledge": BACKEND,
+      // regex key: a plain "/demo" prefix would also swallow the SPA route /demo-console
+      "^/demo/": BACKEND,
     },
   },
   build: {

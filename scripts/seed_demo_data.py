@@ -86,6 +86,8 @@ def send_failure(customer: dict, scenario: tuple, payment_id: str) -> dict:
 def send_abandonment(customer: dict, amount: float) -> dict:
     resp = httpx.post(
         f"{SERVER_URL}/debug/simulate-abandonment",
+        # needed only when MERCHANT_API_KEY is set on the server
+        headers={"X-Merchant-Key": os.environ.get("MERCHANT_API_KEY", "")},
         json={
             "customer_id": customer["id"],
             "subscription_id": customer["sub"],

@@ -36,6 +36,24 @@ def execute_action(action: str, event) -> tuple[bool, str]:
     if action == AgentAction.NO_ACTION.value:
         return True, "no_action_taken"
 
+    # ── Scheduler-driven channel actions (never chosen by the LLM) ───────────
+    if action == AgentAction.SEND_PRE_DEBIT_NOTICE.value:
+        # Real: RBI requires a pre-debit notification ~24h before a recurring debit
+        return True, "pre_debit_notice_sent"
+
+    if action == AgentAction.SEND_PAYMENT_LINK.value:
+        # Real: deliver a Razorpay payment link by SMS/email/WhatsApp
+        return True, "payment_link_sent"
+
+    if action == AgentAction.SEND_REMANDATE_LINK.value:
+        # Real: deliver a fresh mandate-registration link (the old one is dead)
+        return True, "remandate_link_sent"
+
+    if action == AgentAction.VOICE_CALL.value:
+        # The call itself is placed by app/voice.py (it needs the script and
+        # parses the outcome); this label only records that one was queued.
+        return True, "voice_call_placed"
+
     # ── Shared ───────────────────────────────────────────────────────────────
     if action in (AgentAction.ESCALATE_TO_HUMAN.value, AgentAction.RULE_DEFAULT_FALLBACK.value):
         return _escalate(event)

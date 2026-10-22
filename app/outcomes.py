@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -24,7 +26,12 @@ def outcomes(db: Session = Depends(get_db)):
     nudges_sent = (
         db.query(func.count(Decision.id))
         .filter(
-            Decision.outcome.in_(["nudge_sent", "reminder_sent", "resume_link_sent"])
+            Decision.outcome.in_([
+                "nudge_sent", "reminder_sent", "resume_link_sent",
+                # scheduler-driven channels (mandate / receivables / voice)
+                "pre_debit_notice_sent", "payment_link_sent",
+                "remandate_link_sent", "voice_call_placed",
+            ])
             | Decision.outcome.like("incentive_offered%")
         )
         .scalar() or 0
@@ -82,6 +89,14 @@ def outcomes(db: Session = Depends(get_db)):
     }
 
 
+def _is_uuid(v: str) -> bool:
+    try:
+        uuid.UUID(str(v))
+        return True
+    except ValueError:
+        return False
+
+
 @router.get("/outcomes/events")
 def list_events(db: Session = Depends(get_db), limit: int = 50):
     events = db.query(Event).order_by(Event.received_at.desc()).limit(limit).all()
@@ -107,7 +122,10 @@ def list_events(db: Session = Depends(get_db), limit: int = 50):
     # razorpay_order_id at all - customer_id on those is OUR OWN
     # Customer.id directly, not a Razorpay id. Resolve those too, so a
     # give-up entry shows a name exactly like every other row.
-    direct_customer_ids = [e.customer_id for e in events if not e.razorpay_order_id and e.customer_id]
+    # Autopay / simulated failures also carry no order id but hold a RAZORPAY customer id ("cust_..."),
+    # which is not a UUID and would make the query below fail - keep only real Customer ids.
+    direct_customer_ids = [e.customer_id for e in events
+                           if not e.razorpay_order_id and e.customer_id and _is_uuid(e.customer_id)]
     names_by_customer_id: dict[str, str] = {}
     if direct_customer_ids:
         rows2 = db.query(Customer.id, Customer.name).filter(Customer.id.in_(direct_customer_ids)).all()

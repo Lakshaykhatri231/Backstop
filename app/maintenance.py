@@ -38,6 +38,8 @@ from app.models import (
 )
 from app.revenue import adjust as adjust_revenue, resolve_cart_loss
 from app.tiering import refresh_tier
+from app.mandate import lapse_stale_runs
+from app.receivables import flag_overdue_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +158,17 @@ def close_dead_recovery_paths(db) -> dict:
         db.commit()
         resolve_cart_loss(db, ce, "escalated_cancel_lapsed")
 
+    # 5. Mandate runs (recurring-debit failures) that will never see a
+    #    subscription.charged: their own at_risk_mandate thread, own exit.
+    mandate_lapsed = lapse_stale_runs(db, now)
+
+    # 6. B2B invoices whose due date has passed enter receivables_overdue
+    #    (the chase ladder itself is driven by the scheduler, not this sweep).
+    invoices_flagged = flag_overdue_invoices(db, now)
+
     return {"offers_expired": len(stale_cards), "nudges_lapsed": len(lapsed_signals),
-            "failed_runs_lapsed": len(lapsed_runs), "escalations_lapsed": len(lapsed_escalations)}
+            "failed_runs_lapsed": len(lapsed_runs), "escalations_lapsed": len(lapsed_escalations),
+            "mandate_runs_lapsed": mandate_lapsed, "invoices_flagged_overdue": invoices_flagged}
 
 
 def run_sweep_once() -> dict:
@@ -166,6 +177,16 @@ def run_sweep_once() -> dict:
         orders_result = abandon_stale_orders(db)
         losses_result = close_dead_recovery_paths(db)
         tier_result = refresh_all_tiers(db)
+        try:                                   # notes expire (retention); never let this break the sweep
+            from app import memory
+            memory.sweep_expired(db)
+        except Exception:
+            db.rollback()
+        try:                                   # vectors made by an older embedding model are refreshed in the background
+            from app import knowledge
+            knowledge.reembed_stale(db)
+        except Exception:
+            db.rollback()
         summary = {**tier_result, **orders_result, **losses_result}
         # Only worth an audit entry when it actually did something -
         # otherwise a sweep every 30 minutes would bury the log in noise.
@@ -189,7 +210,8 @@ def run_sweep() -> None:
         try:
             result = run_sweep_once()
             if result["changed"] or result["abandoned"] or result["offers_expired"] or \
-                    result["nudges_lapsed"] or result["failed_runs_lapsed"] or result["escalations_lapsed"]:
+                    result["nudges_lapsed"] or result["failed_runs_lapsed"] or result["escalations_lapsed"] \
+                    or result["mandate_runs_lapsed"] or result["invoices_flagged_overdue"]:
                 logger.info("maintenance sweep: %s", result)
         except Exception:
             logger.exception("maintenance sweep failed; will retry next interval")

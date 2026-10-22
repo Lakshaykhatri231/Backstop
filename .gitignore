@@ -1,17 +1,43 @@
-# Secrets - never commit. Copy .env.example to .env and fill it in.
+# ── Secrets - never commit. Copy .env.example to .env and fill it in. ──
 .env
+.env.*
+!.env.example
 
-# Internal working notes, not part of the project
+# ── Internal working notes, not part of the project ──
 CLAUDE.md
+PENDING_CHANGES.md
 demo.doc
+.claude/
 
-# Python
+# ── Python ──
 venv/
+.venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Local test capture (see capture_test.sh)
+# ── Node / frontend build output ──
+node_modules/
+frontend/dist/
+# voice-activity-detection assets, copied from node_modules by `npm run vad:assets`
+frontend/public/vad/
+
+# ── Local data: backups, logs, caches, generated reports ──
+var/
+*.dump
+*.sql.gz
+*.log
 test_results.txt
+evals/reports/
+evals/.cache/
 
-# macOS
+# ── OS / editor ──
 .DS_Store
+.idea/
+.vscode/
+*.swp

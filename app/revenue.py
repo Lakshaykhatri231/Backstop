@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from app.models import MerchantRevenueState, Order, OrderStatus
 from app.audit import write_audit_entry
 
-FIELDS = ("total_revenue", "at_risk_soft", "at_risk_declined", "at_risk_failed", "total_recovered", "total_lost", "incentive_cost")
+FIELDS = ("total_revenue", "at_risk_soft", "at_risk_declined", "at_risk_failed", "at_risk_mandate", "total_recovered", "total_lost", "incentive_cost",
+          "receivables_overdue", "receivables_collected", "receivables_written_off")
 
 
 def get_or_create_state(db: Session) -> MerchantRevenueState:
@@ -50,12 +51,14 @@ def adjust(db: Session, field: str, delta: float, reason: str, order_id: str | N
 
 
 def as_dict(state: MerchantRevenueState) -> dict:
-    total_at_risk = state.at_risk_soft + state.at_risk_declined + state.at_risk_failed
+    total_at_risk = (state.at_risk_soft + state.at_risk_declined
+                     + state.at_risk_failed + state.at_risk_mandate)
     return {
         "total_revenue": round(state.total_revenue, 2),
         "at_risk_soft": round(state.at_risk_soft, 2),
         "at_risk_declined": round(state.at_risk_declined, 2),
         "at_risk_failed": round(state.at_risk_failed, 2),
+        "at_risk_mandate": round(state.at_risk_mandate, 2),
         "total_at_risk": round(total_at_risk, 2),
         "total_recovered": round(state.total_recovered, 2),
         "total_lost": round(state.total_lost, 2),
@@ -63,6 +66,13 @@ def as_dict(state: MerchantRevenueState) -> dict:
         # Recovered minus what it cost to win it back - the more honest
         # headline number for the scorecard than raw total_recovered alone.
         "net_recovered": round(state.total_recovered - state.incentive_cost, 2),
+        # B2B receivables: own section, never summed into total_at_risk or any
+        # consumer recovery figure above.
+        "receivables": {
+            "overdue": round(state.receivables_overdue, 2),
+            "collected": round(state.receivables_collected, 2),
+            "written_off": round(state.receivables_written_off, 2),
+        },
         "updated_at": state.updated_at,
     }
 
@@ -142,6 +152,11 @@ def record_capture_revenue(db: Session, order: Order, was_recovery: bool) -> boo
         carrier.risk_settled = True
     if carriers:
         db.commit()
+        # Double-pay guard: a basket paid in the store must not stay payable
+        # through a Payment Link we sent for its failed run (app/order_links.py).
+        from app.order_links import close_links_for_settled_carriers  # call-time: order_links imports this module
+        # (A link that itself paid this carrier is already closed as PAID - no-op.)
+        close_links_for_settled_carriers(db, [c.id for c in carriers])
         # Recovered books the amount actually collected, once - the risk
         # release above already used the carrier's own booked amount.
         adjust(db, "total_recovered", order.amount_inr, reason="payment_recovered", order_id=order.razorpay_order_id)

@@ -38,6 +38,10 @@ export function getRecoveryAnalysis(range: AnalysisRange = "30d") {
   return apiFetch<AnalysisResult>(`/insights/recovery-analysis?range=${range}`, { auth: false });
 }
 
+export function getCollectionsAnalysis(range: AnalysisRange = "30d") {
+  return apiFetch<AnalysisResult>(`/insights/collections-analysis?range=${range}`, { auth: false });
+}
+
 export function getTierAnalysis(range: AnalysisRange = "30d") {
   return apiFetch<AnalysisResult>(`/insights/tier-analysis?range=${range}`, { auth: false });
 }

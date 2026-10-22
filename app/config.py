@@ -8,6 +8,19 @@ class Settings(BaseSettings):
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
+    # Payment Links (app/payment_links.py): "auto" = real links when the keys
+    # exist, "real" = always real (missing keys is an error, never a quiet
+    # stub), "stub" = clearly-labelled stand-ins, nothing reaches Razorpay.
+    # Seeds, evals and bulk CSV import force stub themselves. Test Mode allows
+    # only razorpay_test_link_cap links per business, so the Demo Console counts
+    # them and at the cap we fall back to a labelled stand-in (audited) rather
+    # than send a message with no way to pay.
+    razorpay_links: str = "auto"
+    razorpay_test_link_cap: int = 30
+    # Demo Console only: how far ahead of "now" a REAL Razorpay step may sit before the
+    # console warns. A working rule of thumb, not a documented Razorpay limit (their docs
+    # state none for links or tokens) - keep real steps close together when testing.
+    test_mode_window_days: int = 3
 
     # Groq (free tier, no credit card required - console.groq.com)
     groq_api_key: str = ""
@@ -134,11 +147,164 @@ class Settings(BaseSettings):
         configured = {t.strip() for t in self.incentive_eligible_tiers.split(",") if t.strip()}
         return configured & allowed_universe
 
+    # --- Mandate retry sequencer (app/mandate.py) ---
+    # Cap on merchant-driven retries of one failed recurring debit, and how
+    # long after the first failure a retry may still be scheduled.
+    mandate_max_retries: int = 4
+    mandate_retry_window_days: int = 10
+
+    # --- B2B receivables chaser (app/receivables.py) ---
+    # Days relative to due date for the four automated chase steps
+    # (courtesy reminder, payment-link email, email+SMS, voice call), then the
+    # day past due on which the invoice goes to a human (finance).
+    receivables_chase_offsets_days: str = "-3,1,7,15"
+    receivables_escalate_after_days: int = 30
+
+    # --- Environment + access (app/merchant_auth.py, otp.py, voice.py, dnd.py) ---
+    # "production" turns the demo conveniences into hard refusals: the
+    # simulated OTP provider (which returns the code in the response), the
+    # simulated voice provider and the simulated DND registry are all refused,
+    # so a fake verification or a fake "call placed" can't ship by accident.
+    environment: str = "development"
+
+    # Opt-in protection for every merchant-side endpoint. Empty = open (the
+    # demo default); set it and those endpoints need the X-Merchant-Key header.
+    merchant_api_key: str = ""
+    # The one merchant login, created on first start (app/accounts.py::bootstrap_merchant); never changes an existing password.
+    merchant_email: str = ""
+    merchant_password: str = ""
+    merchant_name: str = "Backstop Store"
+
+    # Do-Not-Disturb registry (NCPR). v1 is simulated: a comma-separated list
+    # of numbers treated as registered, for testing the block. A real
+    # provider / registry lookup replaces SimulatedDndChecker in app/dnd.py.
+    dnd_provider: str = "simulated"
+    dnd_simulated_numbers: str = ""
+
+    # --- OTP (app/otp.py) ---
+    # "simulated" returns the code in the API response (demo/test only) and
+    # sends nothing. A real SMS vendor is one class implementing OtpProvider
+    # and needs DLT template registration for India.
+    otp_provider: str = "simulated"   # simulated | msg91
+
+    # Demo Console speech (browser-side convenience, never a phone line).
+    # auto = use the cloud voice/listener when its key is present, else the browser's own.
+    voice_tts_provider: str = "auto"   # auto | browser | azure
+    voice_stt_provider: str = "auto"   # auto | browser | groq
+    # Retrieval (merchant knowledge + customer memory). Embeddings are computed locally (no API key).
+    rag_enabled: bool = True
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_dim: int = 384
+    # A passage is worth showing the model only when it clears the cosine floor AND either shares enough words with the question
+    # or is a strong semantic match (measured by evals/suites/retrieval.py: this rejects ~9 in 10 off-topic questions while keeping
+    # ~8 in 10 real ones; the cosine floor alone rejected 4 in 10).
+    retrieval_min_overlap: float = 0.15
+    retrieval_confident_score: float = 0.40
+    retrieval_min_score: float = 0.22      # cosine floor for showing a passage to the model; the model + validator are the precision filter
+    memory_retention_days: int = 180
+    # Tiered memory (memory_write.py / memory_retrieval.py): episodes, verbatim chunks and facts all expire after
+    # memory_retention_days. The read budget caps how much remembered text one turn may carry to the model.
+    memory_chunk_turns: int = 4              # turns per word-for-word window
+    memory_budget_chars: int = 2000          # hard cap on remembered text handed to the model per turn
+    memory_half_life_days: int = 60          # recency weight halves every this many days
+    memory_top_k: int = 3                    # verbatim windows / episodes returned on a recall question
+    default_merchant_id: str = "default"   # single-merchant today; every RAG row carries it so tenancy is a filter, not a rewrite
+    persona_gender: str = "female"     # matches the Azure voices (Neerja / Swara); male flips fixed lines
+    tts_cache_dir: str = "var/tts_cache"
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""      # e.g. centralindia
+    # Dragon HD voices are the most natural (their pitch and rhythm follow the MEANING of the text,
+    # so they take plain punctuated text, not SSML tuning). Not in Azure's documented free allowance:
+    # if one is refused or over quota the call falls back to azure_voice_fallback (a standard voice).
+    azure_voice_hi: str = "en-IN-Meera:DragonHDLatestNeural"          # multilingual: also reads Devanagari
+    azure_voice_en: str = "en-IN-Meera:DragonHDLatestNeural"
+    azure_voice_hinglish: str = "en-IN-Meera:DragonHDLatestNeural"
+    azure_voice_fallback: str = "en-IN-NeerjaNeural"
+    groq_stt_model: str = "whisper-large-v3"
+    stt_language_mode: str = "fixed"   # fixed = tell Whisper the call's language; auto = let it detect (see scripts/eval_stt.py)
+    otp_ttl_seconds: int = 300
+    otp_max_attempts: int = 5
+    otp_resend_cooldown_seconds: int = 30
+    otp_max_sends_per_phone_per_hour: int = 5
+
+    # --- Outbound text messages (app/messaging.py) ---
+    # simulated: every message is stored in outbound_messages and shown in the
+    #   Demo Console inbox; nothing leaves the machine.
+    # msg91:     sent through MSG91's Flow API (needs a DLT-approved template
+    #   id per message kind; a kind with no template id is recorded as failed,
+    #   never silently dropped or sent as free text).
+    messaging_provider: str = "simulated"
+    msg91_auth_key: str = ""
+    msg91_sender_id: str = ""
+    msg91_otp_template_id: str = ""
+    # one DLT template id per message kind; variables are sent as var1..varN
+    # in the order given by messaging.TEMPLATE_VARS
+    msg91_tpl_pre_debit_notice: str = ""
+    msg91_tpl_payment_link: str = ""
+    msg91_tpl_remandate_link: str = ""
+    msg91_tpl_promise_reminder: str = ""
+    msg91_tpl_invoice_courtesy: str = ""
+    msg91_tpl_invoice_overdue: str = ""
+    msg91_tpl_payment_link_offer: str = ""
+    msg91_tpl_order_offer_ended: str = ""
+    # Used when a link must be absolute (SMS bodies). Local default is fine
+    # for the sandbox; set to your public URL for anything else.
+    public_base_url: str = "http://localhost:8000"
+
+    # --- Collections insights (app/collections_insights.py) ---
+    # Below this many resolved cases a metric is "not enough data", never a
+    # recommendation.
+    collections_min_sample: int = 20
+
+    # --- Voice recovery (app/voice.py) ---
+    # Consumer calls are only ever about a FAILED PAYMENT (never an abandoned
+    # cart), above this order value, still unresolved after the wait below.
+    voice_min_order_value: int = 1000
+    voice_failed_order_wait_hours: int = 4
+    # Total automated calls per debt before it goes to a human. (One per day
+    # and the 08:00-19:00 IST window are hardcoded guardrails, not tunable.)
+    voice_max_attempts_per_subject: int = 3
+
+    # --- Promise-to-pay (app/promises.py) ---
+    # Longest a customer may promise ahead (consumers vs businesses), how
+    # many broken promises on one debt before we stop accepting new ones, and
+    # how long after the promised date we wait before calling it broken.
+    promise_max_days_b2c: int = 7
+    promise_max_days_b2b: int = 30
+    promise_max_broken: int = 2
+    promise_grace_days: int = 1
+
+    # --- Scheduler (app/scheduler.py) ---
+    scheduler_interval_seconds: int = 60
+
     # --- Demo failure injection ---
     simulate_llm_failure: bool = False
 
     # --- Storefront (customer-facing demo) ---
     storefront_secret_key: str = "dev-only-change-me"   # signs session tokens - fine hardcoded for a demo
+
+
+def production_problems(s: "Settings") -> list[str]:
+    """Why this configuration is not safe to run as environment=production.
+    Empty list = fine (and always empty outside production)."""
+    if s.environment != "production":
+        return []
+    problems = []
+    if s.storefront_secret_key == "dev-only-change-me":
+        problems.append("STOREFRONT_SECRET_KEY is still the default - it signs OTP proofs, "
+                        "customer sessions and self-serve links, so anyone could forge them")
+    if not s.merchant_api_key:
+        problems.append("MERCHANT_API_KEY is empty - every merchant endpoint would be open")
+    if not s.razorpay_webhook_secret:
+        problems.append("RAZORPAY_WEBHOOK_SECRET is empty - webhooks cannot be verified")
+    if s.razorpay_links == "stub":
+        problems.append("RAZORPAY_LINKS is 'stub' - customers would get stand-in payment links")
+    if s.razorpay_key_id.startswith("rzp_test_"):
+        problems.append("RAZORPAY_KEY_ID is a Test Mode key - no real money would move")
+    if s.messaging_provider == "simulated":
+        problems.append("MESSAGING_PROVIDER is 'simulated' - notices and payment links "
+                        "would be recorded but never delivered")
+    return problems
 
 
 settings = Settings()

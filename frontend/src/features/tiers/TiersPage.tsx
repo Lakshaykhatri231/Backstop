@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { AuthNav, RegisterInvoiceButton } from "@/features/auth/AuthNav";
 import { AlertCircle } from "lucide-react";
 
 import { SectionHeading } from "@/features/architecture/components/primitives";
@@ -33,8 +34,12 @@ export function TiersPage() {
               Architecture
             </Link>
             <span className="px-3 py-1.5 rounded-md text-ink font-semibold">Tiers</span>
+            <Link to="/demo-console" className="px-3 py-1.5 rounded-md text-ink/50 hover:text-ink">
+              Simulation Console
+            </Link>
           </nav>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-3"><RegisterInvoiceButton /><AuthNav /></div>
+          <div className="flex items-center gap-3">
             <span className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-soft/10 text-soft">
               <span className="size-1.5 rounded-full bg-soft" /> Razorpay Test Mode
             </span>

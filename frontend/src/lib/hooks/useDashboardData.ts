@@ -70,3 +70,22 @@ export function useInvalidateAuditLog() {
 export function useTierConfig() {
   return useQuery({ queryKey: ["insights", "tier-config"], queryFn: insights.getTierConfig });
 }
+
+// Receivables / promises / voice - own polling hooks, same 5s cadence.
+import * as receivables from "../api/receivables";
+
+export function useReceivablesSummary() {
+  return useQuery({ queryKey: ["receivables", "summary"], queryFn: receivables.getReceivablesSummary, refetchInterval: POLL_MS });
+}
+
+export function useInvoices() {
+  return useQuery({ queryKey: ["receivables", "invoices"], queryFn: receivables.getInvoices, refetchInterval: POLL_MS });
+}
+
+export function usePromises() {
+  return useQuery({ queryKey: ["promises"], queryFn: receivables.getPromises, refetchInterval: POLL_MS });
+}
+
+export function useVoiceCalls() {
+  return useQuery({ queryKey: ["voice", "calls"], queryFn: receivables.getVoiceCalls, refetchInterval: POLL_MS });
+}

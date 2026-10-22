@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AuthNav, RegisterInvoiceButton } from "@/features/auth/AuthNav";
 import { Link } from "@tanstack/react-router";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -7,8 +8,11 @@ import { OverviewTab } from "./OverviewTab";
 import { EventFeedTab } from "./EventFeedTab";
 import { RevenueCustomersTab } from "./RevenueCustomersTab";
 import { AuditLogTab } from "./AuditLogTab";
+import { ReceivablesTab } from "./ReceivablesTab";
+import { KnowledgeTab } from "./KnowledgeTab";
+import { MerchantKeyGate } from "./MerchantKeyGate";
 
-type TabKey = "overview" | "events" | "revenue" | "audit";
+type TabKey = "overview" | "events" | "revenue" | "receivables" | "knowledge" | "audit";
 
 export function DashboardPage() {
   const [tab, setTab] = useState<TabKey>("overview");
@@ -38,7 +42,14 @@ export function DashboardPage() {
           >
             Tiers
           </Link>
-          <div className="ml-auto flex items-center gap-3">
+          <Link
+            to="/demo-console"
+            className="px-3 py-1.5 rounded-md text-ink/50 hover:text-ink text-sm"
+          >
+            Simulation Console
+          </Link>
+          <div className="ml-auto flex items-center gap-3"><RegisterInvoiceButton /><AuthNav /></div>
+          <div className="flex items-center gap-3">
             <span className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-soft/10 text-soft">
               <span className="size-1.5 rounded-full bg-soft" /> Test Mode
             </span>
@@ -48,11 +59,14 @@ export function DashboardPage() {
       </header>
 
       <main className="mx-auto max-w-[1320px] px-6 py-8">
+        <MerchantKeyGate>
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
           <TabsList className="bg-ink/5 mb-6">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="events">Event Feed</TabsTrigger>
             <TabsTrigger value="revenue">Revenue &amp; Customers</TabsTrigger>
+            <TabsTrigger value="receivables">Receivables &amp; Promises</TabsTrigger>
+            <TabsTrigger value="knowledge">Call Knowledge</TabsTrigger>
             <TabsTrigger value="audit">Audit Log</TabsTrigger>
           </TabsList>
 
@@ -65,10 +79,17 @@ export function DashboardPage() {
           <TabsContent value="revenue">
             <RevenueCustomersTab />
           </TabsContent>
+          <TabsContent value="receivables">
+            <ReceivablesTab />
+          </TabsContent>
+          <TabsContent value="knowledge">
+            <KnowledgeTab />
+          </TabsContent>
           <TabsContent value="audit">
             <AuditLogTab />
           </TabsContent>
         </Tabs>
+        </MerchantKeyGate>
       </main>
     </div>
   );

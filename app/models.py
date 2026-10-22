@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Float, Integer, DateTime, Enum, ForeignKey, Boolean, Text, text
+from sqlalchemy import Column, String, Float, Integer, DateTime, Date, Enum, ForeignKey, Boolean, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -38,6 +38,47 @@ class AgentAction(str, enum.Enum):
     # --- Shared across both pipelines ---
     ESCALATE_TO_HUMAN = "escalate_to_human"
     RULE_DEFAULT_FALLBACK = "rule_default_fallback"  # used only when LLM path fails
+    # --- Scheduler-driven channel actions (mandate / receivables / voice) ---
+    # Chosen ONLY by deterministic rules + the scheduler (app/scheduler.py),
+    # never offered to the LLM - see SCHEDULER_ONLY_ACTIONS below.
+    SEND_PRE_DEBIT_NOTICE = "send_pre_debit_notice"
+    SEND_PAYMENT_LINK = "send_payment_link"
+    SEND_REMANDATE_LINK = "send_remandate_link"
+    VOICE_CALL = "voice_call"
+
+
+# Excluded from the LLM tool schema (llm_agent.VALID_ACTIONS) so the model can
+# never pick them: the LLM stays bounded to the original recovery actions.
+SCHEDULER_ONLY_ACTIONS = frozenset({
+    AgentAction.SEND_PRE_DEBIT_NOTICE,
+    AgentAction.SEND_PAYMENT_LINK,
+    AgentAction.SEND_REMANDATE_LINK,
+    AgentAction.VOICE_CALL,
+})
+
+
+class ScheduledKind(str, enum.Enum):
+    MANDATE_RETRY = "mandate_retry"
+    PRE_DEBIT_NOTICE = "pre_debit_notice"
+    PROMISE_REMINDER = "promise_reminder"
+    PROMISE_CHECK = "promise_check"
+    INVOICE_CHASE = "invoice_chase"
+    VOICE_CALL = "voice_call"
+    # Failed storefront order: the ONE reminder on the day the customer named
+    # (not a promise - a shopper owes nothing). Contact kind.
+    ORDER_LINK_REMINDER = "order_link_reminder"
+    # Card mandates we debit ourselves (app/autopay.py). Not contact kinds: the
+    # bank pre-debit notice is Razorpay's, our own SMS is PRE_DEBIT_NOTICE.
+    MANDATE_PDN = "mandate_pdn"          # create the debit order (bank notice starts now)
+    MANDATE_DEBIT = "mandate_debit"      # charge it, once the notice window has passed
+
+
+class ScheduledStatus(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    CLAIMED = "claimed"
+    DONE = "done"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
 
 
 class EventType(str, enum.Enum):
@@ -201,6 +242,14 @@ class Customer(Base):
                               server_default=text("(now() at time zone 'utc')"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Contact + consent, used only by the outreach channels (voice, SMS).
+    # All nullable / defaulted so existing rows stay valid; the ALTERs live in
+    # sql/2026_10_recovery_extensions.sql (create_all won't add columns).
+    phone = Column(String, nullable=True)
+    preferred_language = Column(String, nullable=False, default="hinglish", server_default="hinglish")  # en | hi | hinglish
+    voice_consent = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    consent_at = Column(DateTime, nullable=True)
+
     orders = relationship("Order", back_populates="customer")
     cart_events = relationship("CartEvent", back_populates="customer")
 
@@ -311,6 +360,15 @@ class MerchantRevenueState(Base):
     at_risk_soft = Column(Float, nullable=False, default=0.0)         # silent abandons / nudges: real recovery targets
     at_risk_declined = Column(Float, nullable=False, default=0.0)     # explicit cancels: tracked, weighted down in recovery %
     at_risk_failed = Column(Float, nullable=False, default=0.0, server_default="0")  # failed payments: own thread, own exits
+    at_risk_mandate = Column(Float, nullable=False, default=0.0, server_default="0")  # failed recurring debits: own thread, exits via MandateRun.risk_settled
+    # B2B receivables: a SEPARATE ledger section, deliberately NOT part of
+    # total_at_risk or the consumer recovery rate (one big invoice would
+    # drown a thousand carts, and a business paying 45 days late is normal
+    # where a cart abandoned for 45 days is gone). Same rules otherwise: every
+    # mutation goes through revenue.adjust() and is audited.
+    receivables_overdue = Column(Float, nullable=False, default=0.0, server_default="0")
+    receivables_collected = Column(Float, nullable=False, default=0.0, server_default="0")
+    receivables_written_off = Column(Float, nullable=False, default=0.0, server_default="0")
     total_recovered = Column(Float, nullable=False, default=0.0)      # at-risk amount that later converted
     total_lost = Column(Float, nullable=False, default=0.0)           # given up as unrecoverable
     incentive_cost = Column(Float, nullable=False, default=0.0)       # money given away via discounts, tracked explicitly
@@ -368,6 +426,373 @@ class PendingSignal(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime, nullable=True)
+
+
+class MandateStatus(str, enum.Enum):
+    ACTIVE = "active"          # failed cycle, retries/communications in flight
+    RECOVERED = "recovered"    # a later debit succeeded (subscription.charged)
+    EXHAUSTED = "exhausted"    # retry cap / window hit - handed to a human
+    HALTED = "halted"          # subscription halted; waiting on a re-mandate
+    CANCELLED = "cancelled"    # closed with no recovery (lapsed re-mandate, merchant cancel)
+
+
+class MandateRun(Base):
+    """One failed billing cycle of a recurring debit (UPI Autopay / e-mandate /
+    tokenised card), from first failure to recovered-or-lost.
+
+    Own money thread: the full cycle amount is booked into
+    MerchantRevenueState.at_risk_mandate exactly once when the run opens and
+    leaves exactly once through risk_settled (atomic claim, same pattern as
+    Order.risk_settled) - either total_recovered or total_lost. Never crosses
+    the cart / declined / failed-payment buckets."""
+    __tablename__ = "mandate_runs"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    subscription_id = Column(String, nullable=False, index=True)
+    razorpay_customer_id = Column(String, nullable=True)
+    amount_inr = Column(Float, nullable=False, default=0.0)
+    failure_reason = Column(String, nullable=True)
+    attempts_made = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default=MandateStatus.ACTIVE.value, index=True)
+    risk_booked = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    risk_settled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    opened_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    next_action_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    # Set for a card mandate we debit ourselves (Mandate row); then
+    # subscription_id holds its token id so every existing query keeps working.
+    # NULL = a Razorpay Subscription run (simulator / Demo Console scenario).
+    mandate_id = Column(UUID(as_uuid=False), nullable=True, index=True)
+
+
+class MandateState(str, enum.Enum):
+    SETUP = "setup"            # registration link sent, customer has not authorised yet
+    ACTIVE = "active"          # token confirmed - we may debit it
+    REJECTED = "rejected"      # authorisation failed / token rejected at the mandate hub
+    CANCELLED = "cancelled"    # customer / bank / merchant cancelled the token
+    PAUSED = "paused"
+
+
+class Mandate(Base):
+    """A card mandate on Razorpay's recurring API that WE debit (app/autopay.py).
+
+    Razorpay holds the token, sends the bank pre-debit notice and moves the
+    money; our scheduler decides WHEN each debit happens (MANDATE_PDN then
+    MANDATE_DEBIT), so a promise or a retry rule moves a real debit. A failed
+    cycle opens an ordinary MandateRun (mandate_id set) - same money thread,
+    same notices, promises and sweep as a Subscription run."""
+    __tablename__ = "mandates"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    customer_name = Column(String, nullable=False)
+    contact = Column(String, nullable=True)          # what Razorpay gets; ContactPoint stays the
+    email = Column(String, nullable=True)            # source of truth for whether WE may contact
+    razorpay_customer_id = Column(String, nullable=True, index=True)
+    registration_invoice_id = Column(String, nullable=True, index=True)   # inv_... (auth link)
+    registration_url = Column(String, nullable=True)
+    token_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default=MandateState.SETUP.value, index=True)
+    amount_inr = Column(Float, nullable=False)       # one cycle
+    max_amount_inr = Column(Float, nullable=False)
+    frequency = Column(String, nullable=False, default="monthly")
+    next_due_at = Column(DateTime, nullable=True)
+    # Who started it from the customer page (app/account.py); NULL for ones the
+    # Demo Console / merchant created. service_* is what they chose to pay for.
+    customer_id = Column(UUID(as_uuid=False), nullable=True, index=True)
+    service_key = Column(String, nullable=True)
+    service_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AppUser(Base):
+    """A login that is not a storefront shopper: the merchant (one) and the
+    invoice customers (a business) the merchant registers. Kept out of
+    `customers` on purpose - that table feeds tiering, the engagement sweep and
+    the dashboard's shopper lists, none of which should ever see these rows."""
+    __tablename__ = "app_users"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    email = Column(String, unique=True, nullable=False, index=True)
+    password_hash = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    role = Column(String, nullable=False, index=True)      # merchant | business
+    business_account_id = Column(UUID(as_uuid=False), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PaymentLinkStatus(str, enum.Enum):
+    CREATED = "created"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"    # replaced by a newer link for the same debt (amount/offer changed)
+
+
+class PaymentLink(Base):
+    """Every Razorpay Payment Link this app hands a customer (app/payment_links.py),
+    one OPEN row per debt at most. Created lazily - only when a message is about
+    to carry it - and reused, because Test Mode caps a business at ~30 links.
+    `is_stub` rows are labelled stand-ins (stub mode, or the cap was hit): the
+    inbox says so and nothing can be paid through them.
+
+    original_amount_inr / offer_* snapshot an offer the cart ALREADY had (failed
+    storefront orders only); a link never outlives that offer (expire_at)."""
+    __tablename__ = "payment_links"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    razorpay_link_id = Column(String, nullable=True, unique=True, index=True)
+    short_url = Column(String, nullable=True)
+    subject_type = Column(String, nullable=False, index=True)    # invoice | order | mandate_run
+    subject_id = Column(String, nullable=False, index=True)
+    amount_inr = Column(Float, nullable=False)
+    original_amount_inr = Column(Float, nullable=True)
+    offer_pct = Column(Float, nullable=True)
+    offer_ends_at = Column(DateTime, nullable=True)
+    expire_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default=PaymentLinkStatus.CREATED.value, index=True)
+    is_stub = Column(Boolean, nullable=False, default=False)
+    stub_reason = Column(String, nullable=True)                  # stub_mode | limit_reached | error
+    amount_paid_inr = Column(Float, nullable=False, default=0.0)
+    paid_payment_ids = Column(Text, nullable=False, default="[]")
+    refunded_payment_ids = Column(Text, nullable=False, default="[]")   # duplicate-basket refunds
+    created_at = Column(DateTime, default=datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+
+
+class InvoiceStatus(str, enum.Enum):
+    OPEN = "open"                      # issued, not yet due
+    OVERDUE = "overdue"                # past due, money booked to receivables_overdue
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
+    DISPUTED = "disputed"              # chase stopped; a human must decide
+    WRITTEN_OFF = "written_off"
+
+
+class BusinessAccount(Base):
+    """A B2B client. Deliberately NOT a Customer row: they never log into the
+    storefront and must not pollute consumer tiering."""
+    __tablename__ = "business_accounts"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    company_name = Column(String, nullable=False)
+    gstin = Column(String, nullable=True)
+    contact_name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    preferred_language = Column(String, nullable=False, default="hinglish")   # en | hi | hinglish
+    voice_consent = Column(Boolean, nullable=False, default=False)
+    payment_terms_days = Column(Integer, nullable=False, default=30)
+    credit_limit_inr = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    invoices = relationship("Invoice", back_populates="account")
+
+
+class Invoice(Base):
+    """One receivable. Money thread (all via revenue.adjust):
+      crosses due_at   -> receivables_overdue += outstanding   (once, overdue_booked)
+      payment          -> overdue -> receivables_collected     (partial allowed)
+      write-off/credit -> overdue -> receivables_written_off
+    `settled` is the atomic exactly-once guard on the final exit. Invoices are
+    never auto-lost: B2B debts are written off by a person, not a timer."""
+    __tablename__ = "invoices"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    account_id = Column(UUID(as_uuid=False), ForeignKey("business_accounts.id"), nullable=False, index=True)
+    invoice_no = Column(String, nullable=False, unique=True, index=True)
+    amount_inr = Column(Float, nullable=False)
+    amount_paid = Column(Float, nullable=False, default=0.0)
+    issued_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    due_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String, nullable=False, default=InvoiceStatus.OPEN.value, index=True)
+    razorpay_payment_link_id = Column(String, nullable=True, index=True)
+    payment_link_url = Column(String, nullable=True)
+    overdue_booked = Column(Boolean, nullable=False, default=False)
+    overdue_booked_amount = Column(Float, nullable=False, default=0.0)
+    overdue_released = Column(Float, nullable=False, default=0.0)   # booked amount already moved out
+    settled = Column(Boolean, nullable=False, default=False)
+    escalated_at = Column(DateTime, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    paid_payment_ids = Column(Text, nullable=False, default="[]")   # json list, payment-level dedupe
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    account = relationship("BusinessAccount", back_populates="invoices")
+
+
+class PromiseStatus(str, enum.Enum):
+    OPEN = "open"
+    KEPT = "kept"
+    PARTIALLY_KEPT = "partially_kept"
+    BROKEN = "broken"
+    CANCELLED = "cancelled"
+
+
+class PaymentPromise(Base):
+    """A customer's commitment to pay a specific at-risk amount by a date.
+
+    A promise is a STATUS OVERLAY on money that is already at risk - it never
+    moves a rupee itself. The debt stays in whatever bucket it was in until a
+    real payment (-> recovered) or a final give-up (-> lost) moves it. That is
+    what keeps the "every at-risk rupee leaves through exactly one exit" rule
+    intact: a customer can promise, break it and promise again without the
+    same money being counted twice or vanishing."""
+    __tablename__ = "payment_promises"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    subject_type = Column(String, nullable=False, index=True)   # mandate_run | invoice
+    subject_id = Column(String, nullable=False, index=True)
+    customer_ref = Column(String, nullable=True)
+    amount_inr = Column(Float, nullable=False, default=0.0)
+    promised_date = Column(Date, nullable=False)
+    captured_via = Column(String, nullable=False, default="merchant_manual")  # voice | self_serve_link | merchant_manual
+    status = Column(String, nullable=False, default=PromiseStatus.OPEN.value, index=True)
+    amount_paid = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class ContactPoint(Base):
+    """The single source of truth for "can we call this person, and how".
+
+    Keyed by whichever identity the debt carries - our storefront customer,
+    Razorpay's customer id (subscription/mandate debits), or a B2B account -
+    so every subject (failed order, mandate run, invoice) resolves its contact
+    the same way (app/contacts.py).
+
+    Voice consent is deliberately only ever CUSTOMER-originated:
+    consent_source can only be "customer_ticked", and consent can only be
+    recorded for a phone that passed an OTP check (phone_verified_at). A
+    merchant can supply the number and language, never the consent."""
+    __tablename__ = "contact_points"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    customer_id = Column(UUID(as_uuid=False), ForeignKey("customers.id"), nullable=True, unique=True, index=True)
+    razorpay_customer_id = Column(String, nullable=True, unique=True, index=True)
+    business_account_id = Column(UUID(as_uuid=False), ForeignKey("business_accounts.id"),
+                                 nullable=True, unique=True, index=True)
+    phone = Column(String, nullable=True)                       # E.164, +91XXXXXXXXXX
+    phone_verified_at = Column(DateTime, nullable=True)
+    preferred_language = Column(String, nullable=False, default="hinglish")   # en | hi | hinglish
+    voice_consent = Column(Boolean, nullable=False, default=False)
+    consent_at = Column(DateTime, nullable=True)
+    consent_source = Column(String, nullable=True)              # customer_ticked
+    consent_text_version = Column(String, nullable=True)
+    # Separate from call consent: may the assistant keep short notes (preferred time, when money
+    # arrives...) to make FUTURE calls easier? Customer-ticked, deletable, expires.
+    memory_consent = Column(Boolean, nullable=False, default=False)
+    memory_consent_at = Column(DateTime, nullable=True)
+    memory_consent_version = Column(String, nullable=True)      # wording the customer agreed to (see contacts.MEMORY_CONSENT_TEXT_VERSION)
+    wrong_number_at = Column(DateTime, nullable=True)           # heard "wrong number" on a call
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OtpChallenge(Base):
+    """One OTP sent to one phone for one purpose. The code is stored hashed
+    (HMAC), never in clear; a challenge dies on success, expiry, or too many
+    wrong guesses (app/otp.py)."""
+    __tablename__ = "otp_challenges"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    phone = Column(String, nullable=False, index=True)
+    purpose = Column(String, nullable=False)       # register | profile | self_serve
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    consumed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class VoiceTurn(Base):
+    """One line of a multi-turn interactive call. `agent` lines are always text
+    WE wrote (script / fixed answers); `customer` lines are what was said."""
+    __tablename__ = "voice_turns"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    call_id = Column(String, nullable=False, index=True)
+    turn_no = Column(Integer, nullable=False)
+    speaker = Column(String, nullable=False)          # agent | customer
+    text = Column(Text, nullable=False)
+    intent = Column(String, nullable=True)            # customer lines: what we understood
+    kind = Column(String, nullable=True)              # agent lines: answer | clarify | handoff | closing
+    timings_json = Column(Text, nullable=True)        # {"stt_ms","llm_ms","retrieve_ms","server_ms","tts_ms"}
+    interrupted = Column(Boolean, nullable=False, default=False)   # customer talked over this agent line
+    sources = Column(Text, nullable=True)             # JSON list of approved passages a policy answer used
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class VoiceCall(Base):
+    """One automated recovery call (simulated provider in v1). The script is a
+    deterministic template; the LLM only ever classifies the transcript into a
+    fixed intent enum (app/voice.py)."""
+    __tablename__ = "voice_calls"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    subject_type = Column(String, nullable=False, index=True)   # invoice | mandate_run
+    subject_id = Column(String, nullable=False, index=True)
+    customer_ref = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    language = Column(String, nullable=False, default="hinglish")
+    script_text = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="completed")  # completed | no_answer | failed
+    transcript = Column(Text, nullable=True)
+    intent = Column(String, nullable=True)
+    intent_source = Column(String, nullable=True)                 # llm | keyword_fallback
+    extracted_promise_date = Column(Date, nullable=True)
+    routed_to = Column(String, nullable=True)
+    duration_s = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class OutboundMessage(Base):
+    """Every customer-facing text the system sends (or, in sandbox mode, WOULD
+    send): who, which template, the exact words, and what happened to it.
+    app/messaging.py is the only writer. In the simulated provider this table
+    IS the "phone" - the Demo Console inbox reads it; with a real provider the
+    same row records the provider's answer."""
+    __tablename__ = "outbound_messages"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    channel = Column(String, nullable=False, default="sms")        # sms (voice lives in voice_calls)
+    template = Column(String, nullable=False, index=True)          # pre_debit_notice | payment_link | ...
+    subject_type = Column(String, nullable=True, index=True)       # mandate_run | invoice | order | otp
+    subject_id = Column(String, nullable=True, index=True)
+    to_phone = Column(String, nullable=True, index=True)           # E.164; null = nobody to send to
+    language = Column(String, nullable=False, default="hinglish")
+    body = Column(Text, nullable=False)
+    link = Column(String, nullable=True)
+    link_kind = Column(String, nullable=True)                      # self_serve | razorpay_payment_link | placeholder
+    provider = Column(String, nullable=False)                      # simulated | msg91
+    status = Column(String, nullable=False)                        # recorded | sent | failed | not_sent_no_contact
+    provider_ref = Column(String, nullable=True)
+    error = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ScheduledAction(Base):
+    """A durable 'do X at time T' job. The project had no scheduler: RETRY_LATER
+    was only a label. Every time-based feature (mandate retries, promise
+    reminders/checks, invoice chase ladder, voice calls) writes rows here and
+    app/scheduler.py fires them.
+
+    Exactly-once: a row is claimed with an atomic
+    UPDATE ... WHERE status='scheduled', same pattern as Order.revenue_recorded.
+    kind/status are plain strings (values from ScheduledKind/ScheduledStatus)
+    so adding a kind never needs an ALTER TYPE."""
+    __tablename__ = "scheduled_actions"
+
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    kind = Column(String, nullable=False, index=True)
+    subject_type = Column(String, nullable=False)       # mandate_run | invoice | promise | order
+    subject_id = Column(String, nullable=False, index=True)
+    customer_ref = Column(String, nullable=True)
+    due_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String, nullable=False, default=ScheduledStatus.SCHEDULED.value, index=True)
+    attempt_no = Column(Integer, nullable=False, default=1)
+    payload_json = Column(Text, nullable=False, default="{}")
+    result = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    executed_at = Column(DateTime, nullable=True)
 
 
 class AuditLog(Base):

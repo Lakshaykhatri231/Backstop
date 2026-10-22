@@ -1,0 +1,68 @@
+{"q": "Kya main kisi insaan se baat kar raha hoon?", "expect_heading": "Who is calling"}
+{"q": "Is this call from a real person?", "expect_heading": "Who is calling"}
+{"q": "यह कॉल कौन कर रहा है?", "expect_heading": "Who is calling"}
+{"q": "Aap kis company se bol rahe ho?", "expect_heading": "Who is calling"}
+{"q": "Kitne baje tak call aa sakti hai?", "expect_heading": "When we call you"}
+{"q": "How many times will you ring me for the same payment?", "expect_heading": "When we call you"}
+{"q": "आप दिन में कितनी बार कॉल करेंगे?", "expect_heading": "When we call you"}
+{"q": "Raat mein phone kyun aaya?", "expect_heading": "When we call you"}
+{"q": "Payment kis tarah se karna hota hai?", "expect_heading": "How to pay"}
+{"q": "Can I use my debit card to pay?", "expect_heading": "How to pay"}
+{"q": "भुगतान कैसे करना है?", "expect_heading": "How to pay"}
+{"q": "Kya OTP ya PIN bataana padega?", "expect_heading": "How to pay"}
+{"q": "Kya ek saath poora dena zaroori hai?", "expect_heading": "Paying part of an invoice"}
+{"q": "Is it okay to pay only half now?", "expect_heading": "Paying part of an invoice"}
+{"q": "क्या मैं कुछ हिस्सा अभी दे सकता हूँ?", "expect_heading": "Paying part of an invoice"}
+{"q": "Remaining amount baad mein de sakta hoon kya?", "expect_heading": "Paying part of an invoice"}
+{"q": "Mujhe agle hafte tak ka time chahiye", "expect_heading": "Asking for more time"}
+{"q": "How far ahead can I give a date for paying?", "expect_heading": "Asking for more time"}
+{"q": "भुगतान के लिए कितने दिन का समय मिल सकता है?", "expect_heading": "Asking for more time"}
+{"q": "Kitne din baad ki date bata sakta hoon?", "expect_heading": "Asking for more time"}
+{"q": "Agar main apni bataayi date par na de paya to?", "expect_heading": "If a promise is missed"}
+{"q": "What if I miss the date I promised?", "expect_heading": "If a promise is missed"}
+{"q": "तारीख निकल गई तो क्या होगा?", "expect_heading": "If a promise is missed"}
+{"q": "Do baar date miss kar di to kya hoga?", "expect_heading": "If a promise is missed"}
+{"q": "Invoice ka reminder kab kab aata hai?", "expect_heading": "Our reminders for a business invoice"}
+{"q": "At what point does a person take over an unpaid invoice?", "expect_heading": "Our reminders for a business invoice"}
+{"q": "इनवॉइस के रिमाइंडर कब आते हैं?", "expect_heading": "Our reminders for a business invoice"}
+{"q": "Due date ke kitne din baad aap call karte ho?", "expect_heading": "Our reminders for a business invoice"}
+{"q": "Mera autopay fail ho gaya ab kya hoga?", "expect_heading": "If your automatic monthly debit fails"}
+{"q": "How many times will the debit be retried?", "expect_heading": "If your automatic monthly debit fails"}
+{"q": "ऑटोपे फेल होने पर दोबारा कब कटेगा?", "expect_heading": "If your automatic monthly debit fails"}
+{"q": "Retry se pehle mujhe pata chalega kya?", "expect_heading": "If your automatic monthly debit fails"}
+{"q": "Mera bank badal gaya hai autopay kaise chalu karun", "expect_heading": "Changing your bank account for autopay"}
+{"q": "How do I switch autopay to a different account?", "expect_heading": "Changing your bank account for autopay"}
+{"q": "ऑटोपे के लिए नया बैंक खाता कैसे जोड़ूँ?", "expect_heading": "Changing your bank account for autopay"}
+{"q": "Naya mandate kaise banta hai?", "expect_heading": "Changing your bank account for autopay"}
+{"q": "Mere account se paise bina bataye kat gaye", "expect_heading": "A charge you do not recognise"}
+{"q": "I don't think this invoice is correct", "expect_heading": "A charge you do not recognise"}
+{"q": "यह बिल मेरा नहीं है, क्या करूँ?", "expect_heading": "A charge you do not recognise"}
+{"q": "Debit maine allow hi nahi kiya tha, ab?", "expect_heading": "A charge you do not recognise"}
+{"q": "Der se dene par extra paisa lagega?", "expect_heading": "Fees, interest and discounts"}
+{"q": "Is there any interest if I delay?", "expect_heading": "Fees, interest and discounts"}
+{"q": "क्या देर करने पर कोई जुर्माना लगेगा?", "expect_heading": "Fees, interest and discounts"}
+{"q": "Kuch rate kam ho sakta hai kya?", "expect_heading": "Fees, interest and discounts"}
+{"q": "Abhi paise ki bahut kami hai", "expect_heading": "If paying is hard right now"}
+{"q": "I'm going through a tough time financially", "expect_heading": "If paying is hard right now"}
+{"q": "अभी हालात ठीक नहीं हैं, क्या करूँ?", "expect_heading": "If paying is hard right now"}
+{"q": "Mushkil waqt hai, kya aap meri help kar sakte ho?", "expect_heading": "If paying is hard right now"}
+{"q": "Aap meri baatein record karke rakhte ho kya?", "expect_heading": "Notes from our calls"}
+{"q": "How long do you keep what I say on calls?", "expect_heading": "Notes from our calls"}
+{"q": "मेरी बातचीत कब तक सेव रहती है?", "expect_heading": "Notes from our calls"}
+{"q": "Meri saari details hatani hain", "expect_heading": "Notes from our calls"}
+{"q": "Aapki policies kya kya hain?", "expect_heading": "Our policies in short"}
+{"q": "What topics can you tell me about?", "expect_heading": "Our policies in short"}
+{"q": "आप किन विषयों पर जानकारी दे सकते हैं?", "expect_heading": "Our policies in short"}
+{"q": "Repayment ke rules kya hain?", "expect_heading": "Our policies in short"}
+{"q": "aaj mausam kaisa hai", "unanswerable": true}
+{"q": "what is the weather today", "unanswerable": true}
+{"q": "IPL ka score kya hai", "unanswerable": true}
+{"q": "best biryani near me", "unanswerable": true}
+{"q": "who is the prime minister of India", "unanswerable": true}
+{"q": "mera favourite colour kya hai", "unanswerable": true}
+{"q": "bitcoin ka price kitna hai", "unanswerable": true}
+{"q": "movie ticket book kar do", "unanswerable": true}
+{"q": "can you sing a song for me", "unanswerable": true}
+{"q": "how do I reset my wifi router", "unanswerable": true}
+{"q": "cricket match kab hai", "unanswerable": true}
+{"q": "train ticket ka status batao", "unanswerable": true}

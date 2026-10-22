@@ -14,6 +14,7 @@ import json
 
 import httpx
 
+from app import groq_retry
 from app.config import settings
 
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
@@ -256,7 +257,7 @@ def _call_groq(prompt: str) -> dict:
     }
 
     try:
-        resp = httpx.post(
+        resp = groq_retry.post(
             GROQ_ENDPOINT,
             headers={
                 "Authorization": f"Bearer {settings.groq_api_key}",

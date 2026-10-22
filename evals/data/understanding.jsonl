@@ -1,0 +1,124 @@
+{"kind": "classify", "text": "Please send me the payment link now. I will pay.", "expect": "PAY_NOW", "pin": false, "note": ""}
+{"kind": "classify", "text": "abhi link bhej do", "expect": "PAY_NOW", "pin": false, "note": ""}
+{"kind": "classify", "text": "अभी लिंक भेज दो, मैं पे कर देता हूँ", "expect": "PAY_NOW", "pin": false, "note": ""}
+{"kind": "classify", "text": "main kal tak kar dunga", "expect": "PROMISE", "pin": false, "note": ""}
+{"kind": "classify", "text": "I will pay by day after tomorrow", "expect": "PROMISE", "pin": false, "note": ""}
+{"kind": "classify", "text": "ok main 5 tareekh tak kar dunga", "expect": "PROMISE", "pin": false, "note": ""}
+{"kind": "classify", "text": "yeh bill galat hai", "expect": "DISPUTE", "pin": false, "note": ""}
+{"kind": "classify", "text": "this invoice is wrong, I already paid", "expect": "DISPUTE", "pin": false, "note": ""}
+{"kind": "classify", "text": "maine pehle hi pay kar diya hai", "expect": "DISPUTE", "pin": false, "note": ""}
+{"kind": "classify", "text": "abhi busy hoon, baad mein call karna", "expect": "CALLBACK", "pin": false, "note": ""}
+{"kind": "classify", "text": "I'm busy right now, call back later", "expect": "CALLBACK", "pin": false, "note": ""}
+{"kind": "classify", "text": "aap galat number pe call kar rahe hain", "expect": "WRONG_NUMBER", "pin": false, "note": ""}
+{"kind": "classify", "text": "wrong number", "expect": "WRONG_NUMBER", "pin": false, "note": ""}
+{"kind": "classify", "text": "main payment nahi karunga", "expect": "REFUSED", "pin": false, "note": ""}
+{"kind": "classify", "text": "I will not pay this", "expect": "REFUSED", "pin": false, "note": ""}
+{"kind": "classify", "text": "yeh debit maine authorise nahi kiya", "expect": "DISPUTE", "pin": true, "note": "unauthorised-debit claim must reach the human path even when the model is down"}
+{"kind": "classify", "text": "this was an unauthorised debit", "expect": "DISPUTE", "pin": true, "note": ""}
+{"kind": "classify", "text": "bina permission ke paise kat gaye", "expect": "DISPUTE", "pin": true, "note": ""}
+{"kind": "question", "text": "kitna bakaya hai", "expect": "Q_AMOUNT", "pin": false, "note": ""}
+{"kind": "question", "text": "how much do I owe", "expect": "Q_AMOUNT", "pin": false, "note": ""}
+{"kind": "question", "text": "yeh kis liye hai", "expect": "Q_WHY", "pin": false, "note": ""}
+{"kind": "question", "text": "why are you calling me", "expect": "Q_WHY", "pin": false, "note": ""}
+{"kind": "question", "text": "due date kya thi", "expect": "Q_DUE", "pin": false, "note": ""}
+{"kind": "question", "text": "when is it due", "expect": "Q_DUE", "pin": false, "note": ""}
+{"kind": "question", "text": "kaise pay karun", "expect": "Q_HOW_PAY", "pin": false, "note": ""}
+{"kind": "question", "text": "how do I pay", "expect": "Q_HOW_PAY", "pin": false, "note": ""}
+{"kind": "question", "text": "kya aap robot ho", "expect": "Q_WHO", "pin": false, "note": ""}
+{"kind": "question", "text": "are you a bot", "expect": "Q_WHO", "pin": false, "note": ""}
+{"kind": "question", "text": "kya main thoda thoda de sakta hoon", "expect": "Q_PARTIAL", "pin": false, "note": ""}
+{"kind": "question", "text": "can I pay in parts", "expect": "Q_PARTIAL", "pin": false, "note": ""}
+{"kind": "question", "text": "late fee lagega kya", "expect": "Q_POLICY", "pin": false, "note": ""}
+{"kind": "question", "text": "refund kaise milega", "expect": "Q_POLICY", "pin": false, "note": ""}
+{"kind": "question", "text": "mujhe manager se baat karni hai", "expect": "Q_OTHER", "pin": false, "note": ""}
+{"kind": "question", "text": "I want to file a complaint", "expect": "Q_OTHER", "pin": false, "note": ""}
+{"kind": "question", "text": "kya kaha aapne", "expect": "Q_REPEAT", "pin": false, "note": ""}
+{"kind": "question", "text": "please repeat that", "expect": "Q_REPEAT", "pin": false, "note": ""}
+{"kind": "question", "text": "pichli baar maine kya kaha tha?", "expect": "Q_MEMORY", "pin": true, "note": "was misread as 'say that again' and replayed the opening script"}
+{"kind": "question", "text": "maine kaunsi tareekh bataayi thi?", "expect": "Q_MEMORY", "pin": true, "note": "'kaunsi' (which) was read as 'kaun' (who are you)"}
+{"kind": "question", "text": "last time what did we talk about", "expect": "Q_MEMORY", "pin": true, "note": ""}
+{"kind": "question", "text": "पिछली बार मैंने क्या कहा था", "expect": "Q_MEMORY", "pin": true, "note": ""}
+{"kind": "question", "text": "aap kaun bol rahe ho", "expect": "Q_WHO", "pin": true, "note": "the genuine 'who' must still work after the kaunsi fix"}
+{"kind": "question", "text": "link bhej do", "expect": "Q_NONE", "pin": false, "note": ""}
+{"kind": "question", "text": "main kal de dunga", "expect": "Q_NONE", "pin": false, "note": ""}
+{"kind": "yes", "text": "haan theek hai note kar lo", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "yes", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "yes yes", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "okay", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "bilkul", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "sure go ahead", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "ji haan", "expect": true, "pin": false, "note": ""}
+{"kind": "yes", "text": "हा हा नोट कर लो", "expect": true, "pin": true, "note": "speech-to-text writes Hindi in Devanagari; this was treated as a new promise and escalated"}
+{"kind": "yes", "text": "हाँ ठीक है", "expect": true, "pin": true, "note": ""}
+{"kind": "yes", "text": "ओके", "expect": true, "pin": true, "note": ""}
+{"kind": "yes", "text": "जी बिल्कुल", "expect": true, "pin": true, "note": ""}
+{"kind": "yes", "text": "नहीं 7 को", "expect": false, "pin": true, "note": ""}
+{"kind": "yes", "text": "nahi 7 ko", "expect": false, "pin": false, "note": ""}
+{"kind": "yes", "text": "मैंने कहा था 7 तारीख", "expect": false, "pin": true, "note": "'कहा' contains 'हा': substring matching would call this a yes"}
+{"kind": "yes", "text": "no thanks", "expect": false, "pin": false, "note": ""}
+{"kind": "yes", "text": "galat hai", "expect": false, "pin": false, "note": ""}
+{"kind": "commit", "text": "ok 10 tareekh tak kar dunga", "expect": true, "pin": false, "note": ""}
+{"kind": "commit", "text": "main pakka kar dungi", "expect": true, "pin": false, "note": ""}
+{"kind": "commit", "text": "I will pay by Friday", "expect": true, "pin": false, "note": ""}
+{"kind": "commit", "text": "कर दूँगा", "expect": true, "pin": false, "note": ""}
+{"kind": "commit", "text": "meri salary 5 tareekh ko aati hai", "expect": false, "pin": false, "note": ""}
+{"kind": "commit", "text": "shayad 7 ko ho jaye kya pata", "expect": false, "pin": false, "note": ""}
+{"kind": "commit", "text": "kal ka din free hai", "expect": false, "pin": false, "note": ""}
+{"kind": "date", "text": "अच्छा जी तो मुझे तेन दिन लग जाएगा.", "expect": "2026-10-21", "pin": true, "note": "exact words from the failed call (speech software wrote तेन for तीन)"}
+{"kind": "date", "text": "तीन दिनों में कर दूंगा", "expect": "2026-10-21", "pin": false, "note": ""}
+{"kind": "date", "text": "तिन दिन", "expect": "2026-10-21", "pin": false, "note": ""}
+{"kind": "date", "text": "I will pay in 3 days", "expect": "2026-10-21", "pin": false, "note": ""}
+{"kind": "date", "text": "I will pay in three days", "expect": "2026-10-21", "pin": false, "note": ""}
+{"kind": "date", "text": "tin din mein pay kar dunga", "expect": "2026-10-21", "pin": false, "note": ""}
+{"kind": "date", "text": "in a week", "expect": "2026-10-25", "pin": false, "note": ""}
+{"kind": "date", "text": "after a week", "expect": "2026-10-25", "pin": false, "note": ""}
+{"kind": "date", "text": "मैं पांच दिन में दे दूँगा", "expect": "2026-10-23", "pin": false, "note": ""}
+{"kind": "date", "text": "let me see", "expect": null, "pin": false, "note": ""}
+{"kind": "date", "text": "I will pay later", "expect": null, "pin": false, "note": ""}
+{"kind": "classify", "text": "nahh", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "nahhh", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "nope", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "na", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "नहीं", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "no no", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "nahi nahi", "expect": "REFUSED", "pin": false, "note": "short no"}
+{"kind": "classify", "text": "abhi nahi", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "later", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "not now", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "busy hoon", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "ek minute", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "hold on", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "ruko zara", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "बाद में", "expect": "CALLBACK", "pin": false, "note": "short later/wait"}
+{"kind": "classify", "text": "pata nahi", "expect": "UNCLEAR", "pin": false, "note": "not a decision"}
+{"kind": "classify", "text": "hmm", "expect": "UNCLEAR", "pin": false, "note": "not a decision"}
+{"kind": "classify", "text": "acha", "expect": "UNCLEAR", "pin": false, "note": "not a decision"}
+{"kind": "yes", "text": "haan", "expect": true, "pin": true, "note": "short yes"}
+{"kind": "yes", "text": "Haan.", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "haaan", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "okkk", "expect": true, "pin": true, "note": "short yes"}
+{"kind": "yes", "text": "han ji", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "jee haan", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "yes please", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "theek hai", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "sahi hai", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "bilkul", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "हाँ जी", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "ठीक है", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "hmm theek hai", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "bhej do", "expect": true, "pin": false, "note": "short yes"}
+{"kind": "yes", "text": "nahh", "expect": false, "pin": true, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "nope", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "na", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "no no", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "nahi", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "pata nahi", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "ek minute", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "kya?", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "hmm", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "acha", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "haan nahi", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "abhi nahi", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "book", "expect": false, "pin": true, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "yesterday", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}
+{"kind": "yes", "text": "token", "expect": false, "pin": false, "note": "short non-yes (book/yesterday/token contain ok/yes/ha as substrings)"}

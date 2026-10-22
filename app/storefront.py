@@ -35,6 +35,8 @@ from app.actions import execute_action
 from app.audit import write_audit_entry
 from app.revenue import adjust as adjust_revenue, round_to_paise_safe, record_capture_revenue, resolve_cart_loss
 from app import runtime_flags
+from app import contacts as contacts_service
+from app import otp as otp_service
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,15 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: str
+    # Phone is REQUIRED and must come with the proof returned by
+    # POST /auth/phone/otp/verify - an account can't be created on a number
+    # nobody has proved they own. Language and consent are optional here and
+    # can be set later (profile / the self-serve link); consent only counts
+    # when the customer ticks it themselves.
+    phone: str
+    phone_proof: str
+    preferred_language: str = "hinglish"   # contacts.DEFAULT_LANGUAGE
+    voice_consent: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -119,19 +130,39 @@ class LoginRequest(BaseModel):
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(Customer).filter(Customer.email == req.email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
+    if req.preferred_language not in contacts_service.VALID_LANGUAGES:
+        raise HTTPException(status_code=422, detail="preferred_language must be one of en, hi, hinglish")
+    try:
+        phone = otp_service.normalize_phone(req.phone)
+    except otp_service.OtpError as e:
+        raise HTTPException(status_code=422, detail={"code": e.code, "message": e.message})
+    if not otp_service.check_proof(req.phone_proof, phone, "register"):
+        raise HTTPException(status_code=422, detail={
+            "code": "phone_not_verified", "message": "Verify your phone number with the code we send."})
+
     customer = Customer(email=req.email, password_hash=hash_password(req.password), name=req.name)
     db.add(customer)
     db.commit()
     db.refresh(customer)
-    return {"token": create_token(customer.id), "customer": _customer_out(db, customer)}
+    cp = contacts_service.upsert_contact(
+        db, customer_id=customer.id, phone=phone, language=req.preferred_language, verified_now=True)
+    if req.voice_consent:
+        contacts_service.record_consent(db, cp, True, via="storefront_register")
+    return {"token": create_token(customer.id), "role": "customer", "customer": _customer_out(db, customer)}
 
 
 @router.post("/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     customer = db.query(Customer).filter(Customer.email == req.email).first()
-    if not customer or not verify_password(req.password, customer.password_hash):
+    if customer and verify_password(req.password, customer.password_hash):
+        return {"token": create_token(customer.id), "role": "customer", "customer": _customer_out(db, customer)}
+    # Not a shopper: the merchant or a business customer (app/accounts.py).
+    from app import accounts
+    user = accounts.login_app_user(db, req.email, req.password)
+    if user is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    return {"token": create_token(customer.id), "customer": _customer_out(db, customer)}
+    return {"token": create_token(user.id, user.role), "role": user.role,
+            "account": accounts.account_out(db, user)}
 
 
 @router.get("/auth/me")
@@ -146,6 +177,9 @@ def _customer_out(db: Session, customer: Customer) -> dict:
         "name": customer.name,
         "tier": customer.tier.value,
         "stats": customer_stats(db, customer.id),
+        # Drives the "add your number" prompt for accounts that pre-date the
+        # required-phone rule; nothing is blocked on it.
+        "contact": contacts_service.contact_out(contacts_service.for_customer(db, customer.id)),
     }
 
 
