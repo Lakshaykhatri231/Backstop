@@ -386,34 +386,78 @@ One generic `place_call(subject_type, id)` with adapters for invoices, failed au
 
 ```mermaid
 flowchart TD
-    D["📞 A debt needs a call"] --> G{"Allowed<br/>to call?"}
-    G -- no --> X["No call<br/>reason logged"]
-    G -- yes --> O["Agent says it is an AI<br/>in the customer's language"]
-    O --> L["🎙️ Customer speaks"]
-    L --> U["Understand<br/>short replies read directly: haan, nahi, ruko<br/>anything longer: one AI call"]
-    U --> K{"What do<br/>they want?"}
-    K -- "asks something" --> AN["Answer from the real bill,<br/>store policy or past calls"]
-    AN --> CHK["✔ Reply checker<br/>real numbers only · no threats or fees<br/>same language"]
-    CHK -- "🔊 speak" --> L
-    K -- "hardship" --> E["Kind reply, then<br/>a date or a person?"]
-    E --> L
-    K -- "will pay on a date" --> P["🤝 Promise booked"]
-    K -- "dispute or complaint" --> HU["👤 Human"]
-    P --> M["Call summary saved<br/>memory only with consent"]
-    HU --> M
+    MIC["① 🎙️ Browser mic + Silero VAD<br/>cuts speech into a clip · barge-in"]
+    STT["② Speech to text<br/>drops blips, silence, phantom phrases"]
+    SR{"③ Short reply?<br/>haan · nahi · ruko"}
+    RAG["④ Retrieve context · RAG<br/>hybrid search: vector + keyword, RRF"]
+    LLM["⑤ ONE model call per turn<br/>intent · promise date · draft reply · sources"]
+    CHK["⑥ Reply checker<br/>real numbers · no fees or threats<br/>right language · grounded"]
+    FIX["Fixed, pre-written line<br/>or approved policy text"]
+    TTS["⑦ Text to speech<br/>SSML pauses · empathetic style"]
+    PLAY["🔊 Browser plays the reply"]
+    TURNS[("⑧ voice_turns<br/>transcript + timings<br/>→ summarised into memory after the call")]
 
-    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef person fill:#fef3c7,stroke:#d97706,color:#78350f
-    classDef check fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
-    class P good
-    class HU person
-    class CHK check
+    W(["Groq Whisper large-v3<br/>language fixed per call"])
+    KB[("Knowledge store<br/>merchant policy · EN / Hinglish / Hindi")]
+    MEM[("Customer memory<br/>facts · past calls · verbatim chunks<br/>written after each call · consent only")]
+    G(["Groq gpt-oss-120b<br/>forced tool call"])
+    AZ(["Azure Neural TTS<br/>Neerja / Swara"])
+
+    MIC -- "audio clip" --> STT
+    STT <--> W
+    STT -- "text" --> SR
+    SR -- "yes: no model needed" --> FIX
+    SR -- no --> RAG
+    KB --> RAG
+    MEM -- "core card always,<br/>past calls on a cue" --> RAG
+    RAG --> LLM
+    LLM <--> G
+    LLM --> CHK
+    CHK -- pass --> TTS
+    CHK -- reject --> FIX
+    FIX --> TTS
+    TTS <--> AZ
+    TTS --> PLAY
+    TTS --> TURNS
+
+    classDef ext fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef guard fill:#fef3c7,stroke:#d97706,color:#78350f
+    class W,G,AZ ext
+    class KB,MEM,TURNS store
+    class CHK,FIX guard
 ```
 
-- **Allowed to call** means a verified number, consent the customer gave, 8 am–7 pm IST, at most once a day, and not on the DND list.
-- **If the checker rejects a reply** (or the AI is down), a fixed, pre-written line is spoken instead.
-- **After 6 turns without a decision**, the call goes to a person.
-- **A spoken date is read by rules**, and the agent confirms it if unsure ("shall I note 12 Oct?").
+🟣 external AI service · 🔵 PostgreSQL (pgvector) store · 🟠 safety path. The numbers match the steps below; after ⑦ the next turn starts again at ①.
+
+**How one turn flows**
+
+1. **Listen.** The browser's Silero VAD cuts the customer's speech into a clip. If the customer talks over the agent, its audio stops (barge-in).
+   The server drops clips that are too short or silent, and known phantom phrases.
+2. **Transcribe.** The server sends the clip to Groq Whisper `large-v3`. The language is fixed to the contact's saved one, and the merchant name,
+   invoice number and amount are passed as hints. Whisper returns Hindi in Devanagari, which is mapped to Roman keywords.
+3. **Short replies skip the model.** A whole line like "haan", "nahi" or "ek minute" is read from fixed word lists. These cover Hinglish,
+   English and Devanagari, plus stretched spellings like "haaan".
+4. **Retrieve (RAG).** Embeddings come from a local multilingual MiniLM model (384 dimensions). Search runs in PostgreSQL, using a pgvector
+   HNSW index when the extension is installed and numpy otherwise. Vector and full-text results are merged with reciprocal-rank fusion.
+   - **Knowledge store:** the merchant's approved policy passages. They are used only when the match is confident.
+   - **Memory store:** a "core card" of the customer's facts and their last call, always included. Past-call windows are added when the customer
+     says something like "pichli baar". Matches are ranked by relevance × recency × importance.
+
+   The two stores are kept separate so one customer's notes can never appear in another customer's answer.
+5. **Decide.** One forced tool call to Groq `gpt-oss-120b` per turn returns the intent, any promise date, a draft reply and the sources it cited.
+   If the call fails or hits a rate limit, keyword rules take over and the fallback is audited.
+6. **Check.** Code validates the draft before it is spoken. It allows only the debt's real numbers and nothing outside the cited passages. It
+   rejects fees, threats, links or a claim to be human, and the reply must be in the call's language. A rejected draft becomes a fixed template
+   or the approved policy text, read in the call's language.
+7. **Speak.** Azure Neural TTS voices the reply, with short SSML pauses and an empathetic style on kind lines. Audio is cached on disk. Without
+   an Azure key, the browser's own voice is used.
+8. **Remember.** Every turn is stored in `voice_turns`. After the call a background thread first saves the episode and the conversation word for
+   word, with no model. Then one model call writes a summary and allow-listed facts. Memory is written only with the customer's consent, and it
+   expires and can be deleted.
+
+Before any of this, the call must pass the guardrails in code: a verified number, consent the customer gave, 8 am to 7 pm IST, once a day, and
+not on DND.
 
 **Guardrails (hardcoded):** verified number + customer-ticked consent · 08:00–19:00 IST · one call a day · attempt cap · DND registry check.
 Consumer calls are for failed payments only (never abandoned carts) above a minimum value. A "dispute" on a mandate call is an
