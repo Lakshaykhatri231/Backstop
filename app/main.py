@@ -136,9 +136,10 @@ def tiers():
     return FileResponse(FRONTEND_INDEX)
 
 
-@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
+@app.get("/favicon.ico", include_in_schema=False)      # browsers still ask for this path by default; the same icon answers it
 def favicon():
-    return FileResponse(FRONTEND_DIST / "favicon.ico")
+    return FileResponse(FRONTEND_DIST / "favicon.svg", media_type="image/svg+xml")
 
 
 app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="frontend-assets")

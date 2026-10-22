@@ -29,7 +29,7 @@ audit log. Customers are contacted only within consent, calling-hours and freque
 2. [Architecture](#architecture)
 3. [Design principles](#design-principles)
 4. [Consumer recovery: the decision pipeline](#consumer-recovery-the-decision-pipeline)
-5. [Rules, tiering, incentives, money, audit](#the-rules-engine-ladder-by-ladder)
+5. [Rules, tiering, incentives, money, audit](#rules-tiering-incentives-money-audit)
 6. [Autopay, promises, receivables](#autopay-promises-and-receivables)
 7. [The Hinglish voice agent](#the-hinglish-voice-agent)
 8. [Policy analytics: four self-tuning analyses](#policy-analytics-four-self-tuning-analyses)
@@ -165,319 +165,86 @@ LLM layer and no gate — its action is already bounded by the deterministic tie
 
 ---
 
-## The rules engine, ladder by ladder
+## Rules, tiering, incentives, money, audit
 
-All thresholds are read live through `runtime_flags`, so a change applied via
-`/insights/apply-suggestion` takes effect without a restart. Confidence values are calibrated
-against the **0.70** auto-execute bar.
+Thresholds are read live through `runtime_flags`, so a change applied from the analytics layer takes effect without a restart. Auto-execute
+needs confidence ≥ **0.70**.
 
-### Payment failure — `rule_based_decision`
+### Decision rules (deterministic, first match wins)
 
-Evaluated top to bottom; first match wins.
+**Payment failure** (`rule_based_decision`)
 
-| # | Condition | Action | Confidence |
-|---|---|---|---|
-| 1 | `attempt_count > max_auto_retries` (3) | `escalate_to_human` | 0.95 |
-| 2 | `amount >= high_value_amount_inr` (₹5,000) | `escalate_to_human` | 0.60 |
-| 3 | `risk_block` | `escalate_to_human` | 0.85 |
-| 4 | `card_expired` | `send_nudge` | 0.90 |
-| 5 | `cancelled` | `send_nudge` | 0.70 |
-| 6 | `unknown` / `invalid_card`, 1st attempt | `retry_now` | 0.55 / 0.60 |
-| 7 | `unknown` / `invalid_card`, 2nd+ attempt | `escalate_to_human` | 0.75 |
-| 8 | `insufficient_funds`, 1st attempt | `retry_later` | 0.80 |
-| 9 | `insufficient_funds`, 2nd+ attempt | `retry_later` | 0.55 |
-| 10 | `bank_decline`/`network_error`/`authentication_failed`, 1st attempt | `retry_now` | 0.75 network, else 0.65 |
-| 11 | same three, 2nd+ attempt | `retry_later` | 0.50 |
-| 12 | unrecognised reason code | `escalate_to_human` | 0.30 |
+| Condition | Action | Why |
+|---|---|---|
+| attempts > 3 | `escalate_to_human` (0.95) | Retry cap is checked first, above even `risk_block` |
+| amount ≥ ₹5,000 | `escalate_to_human` (0.60) | Confidence deliberately below the bar, so a person always sees it |
+| `risk_block` | `escalate_to_human` (0.85) | Unsafe at any attempt count |
+| `card_expired`, `cancelled` | `send_nudge` | A retry cannot succeed / would burn goodwill |
+| `unknown`, `invalid_card` | `retry_now` once, then escalate | Escalates at attempt 2 |
+| `insufficient_funds` | `retry_later` | The money isn't there yet, so never `retry_now` |
+| `bank_decline`, `network_error`, `authentication_failed` | `retry_now`, then `retry_later` | Infrastructure-side failures |
+| unrecognised reason | `escalate_to_human` (0.30) | |
 
-Why: the retry cap is checked **first**, above even `risk_block`. The high-value floor sits
-second, above every reason-specific branch, with its 0.60 confidence deliberately *below* the
-0.70 bar. `risk_block` never gets an attempt-1 retry — unsafe at any count. `card_expired` and
-`cancelled` are message-only (retrying can't succeed / would burn goodwill right after a "no").
-`unknown`/`invalid_card` escalate at attempt 2, short-circuiting the 3-attempt runway.
-`insufficient_funds` never uses `retry_now` — the money isn't there yet, so it's `retry_later`
-from the first attempt.
+**Checkout drop-off** (`rule_based_dropoff_decision`, abandonments counted over 7 days): never-opened → `no_action`; high value → escalate;
+1st → `send_reminder`; 2nd → `offer_incentive` if the gates pass, else `send_resume_link`; 3rd+ → escalate.
 
-### Checkout drop-off — `rule_based_dropoff_decision`
-
-`abandonment_count` is windowed over `dropoff_lookback_days` (**7 days**).
-
-| # | Condition | Action | Confidence |
-|---|---|---|---|
-| 1 | `checkout_status == "created"` | `no_action` | 0.90 |
-| 2 | `amount >= high_value_amount_inr` | `escalate_to_human` | 0.85 |
-| 3 | `abandonment_count <= 1` | `send_reminder` | 0.85 |
-| 4 | `abandonment_count == 2`, incentive gates pass | `offer_incentive` | 0.80 |
-| 5 | `abandonment_count == 2`, gates fail | `send_resume_link` | 0.75 |
-| 6 | `abandonment_count >= 3` | `escalate_to_human` | 0.92 |
-
-`created` means the customer never opened the payment screen — logged, never actioned. This
-pipeline has no local `Customer` row (no tier), so its incentive check conservatively uses the
-**lowest** tier's cap.
-
-### Pre-checkout cart event — `rule_based_cart_event_decision`
-
-Rules only — no LLM, no gate. Read as: **action when gates pass / action when they don't.**
+**Pre-checkout cart event** (rules only, no LLM): the action depends on tier and signal. An explicit cancel is scored lower than a silent
+abandon at the same tier, because a silent abandon is ambiguous while a cancel is the customer saying no. A 3rd explicit cancel inside 180
+days escalates regardless of tier.
 
 | Tier | Explicit cancel | Silent abandon |
 |---|---|---|
-| **RISK** | `no_action` (0.85) | `send_reminder` (0.70) |
-| **NEW** | `no_action` (0.75) | `send_reminder` (0.80) |
-| **CASUAL** | `offer_incentive` (0.62) / `send_resume_link` (0.60) | `offer_incentive` (0.72) / `send_reminder` (0.78) |
-| **REGULAR** | `offer_incentive` (0.65) / `send_resume_link` (0.62) | `offer_incentive` (0.77) / `send_reminder` (0.76) |
-| **LOYAL** | `offer_incentive` (0.68) / `send_resume_link` (0.65) | `offer_incentive` (0.82) / `send_reminder` (0.75) |
+| RISK / NEW | `no_action` | `send_reminder` |
+| CASUAL / REGULAR / LOYAL | `offer_incentive` if gates pass, else `send_resume_link` | `offer_incentive` if gates pass, else `send_reminder` |
 
-**Checked before all of the above:** a 3rd+ explicit cancel within the behaviour window forces
-`escalate_to_human` (0.88), overriding every tier including LOYAL. A silent abandon never
-triggers it.
+The LLM can only return one of nine `AgentAction` values; the scheduler-only actions are excluded from its tool schema.
 
-**The confidence numbers encode signal strength.** Every explicit-cancel branch scores lower
-than the matching silent-abandon branch at the same tier — a silent abandon is ambiguous, an
-explicit cancel is the customer actively saying no, so chasing it hard risks burning goodwill.
-The consequence: every explicit-cancel incentive sits below the 0.70 bar, every silent-abandon
-one sits above it.
+### Customer tiering
 
-### The `AgentAction` enum
+Tiers decide how much recovery effort a customer is worth. They are driven by an **engagement score**, not payment success rate, which
+punished the customers who retried hardest (`FAILED, FAILED, CAPTURED` scored 33%).
 
-Nine values, and the LLM can never return anything outside them:
+- **Order of evaluation:** `NEW` (no attempts) → `RISK` (an enforcement gate, checked before the score) → `CASUAL` → `REGULAR` (score ≥ 40 and
+  ≥ 3 attempts) → `LOYAL` (score ≥ 70 and ≥ 5 attempts). Score and volume are AND-ed, so one lucky order can't reach the top.
+- **RISK trips on any of:** a prior `risk_block` (never expires), attributable failure rate > 0.60, or cancel rate > 0.60 (both need ≥ 2 attempts).
+- **Score (0–100):** `30·completion + 25·frequency + 20·monetary + 15·recency + 10·responsiveness`. Each part is a clamped linear ratio; the
+  weights are hardcoded on purpose. Responsiveness defaults to a neutral 0.5 so never needing recovery isn't punished.
+- **Retries collapse into one purchase attempt** (grouped by an order-independent `sku:qty` signature; a capture closes the run).
+- **Only customer-attributable failures count** (`insufficient_funds`, `card_expired`, `invalid_card`, `authentication_failed`, `risk_block`,
+  `cancelled`). `network_error`, `bank_decline` and `unknown` are excluded from the denominator, so infrastructure cannot lower a score.
+- **Behaviour is windowed** (cancels, abandons, nudge outcomes: 180 days) so a customer isn't penalised forever. `tiering.py::refresh_tier` is the
+  only place a tier is persisted, which keeps `tier_changed` auditing complete.
 
-| Group | Actions |
-|---|---|
-| Payment failure only | `retry_now`, `retry_later`, `send_nudge` |
-| Drop-off + cart events | `send_reminder`, `send_resume_link`, `offer_incentive`, `no_action` |
-| Shared by all pipelines | `escalate_to_human` |
-| LLM-failure marker only | `rule_default_fallback` |
+### Incentives
 
----
+The discount a customer sees is a formula; the LLM is never on this path. The percentage is the customer's position inside their tier's score
+band, mapped onto that tier's discount band: CASUAL 0–10%, REGULAR 10–20%, LOYAL 20–30% (e.g. score 55 → REGULAR, halfway → 15%).
 
-## Customer tiering
+Three gates must all pass: a per-tier **order-value cap** (₹2,000 / ₹3,000 / ₹4,000, all below the ₹5,000 review floor), a per-tier **30-day
+frequency cap** (3 / 2 / 1, deliberately inverted so the biggest discount gets the fewest offers), and **tier eligibility**. NEW and RISK are
+excluded in four independent places, as an anti-abuse guardrail rather than a tunable.
 
-Tiers decide how much recovery effort a customer is worth — **not** payment success rate, which
-graded customers on infrastructure they don't control and punished the ones who retried hardest
-(`/checkout` mints a new order per retry, so FAILED, FAILED, CAPTURED scored 33%).
+Offers follow the cart: the percentage is pinned, the amount is re-priced on every read. An edit above the cap suspends the discount (and
+restores it once back under); an over-cap purchase still counts as a recovery at full price. `incentive_cost` is booked only for redeemed offers.
 
-### Five tiers, evaluated in a fixed order
+### Money
 
-```
-1. NEW      — zero purchase attempts. Checked first.
-2. RISK     — enforcement gate. Checked BEFORE the score ladder.
-3. CASUAL → REGULAR → LOYAL — the climbable ladder, by engagement score.
-```
+`revenue.py` is a single-row ledger; every change goes through `adjust()`, which clamps at 0 and audits. Failed payments, soft abandons and
+explicit cancels each have their **own at-risk bucket and thread, never crossed**. Every rupee that enters an at-risk bucket leaves through
+exactly one exit: **recovered** (a capture) or **lost** (declined, expired, superseded, given up, or lapsed by the maintenance sweep). At-risk is
+always booked at full value; a discount appears later as `incentive_cost`. `net_recovered = total_recovered − incentive_cost`.
 
-`NEW` and `RISK` are **states, not rungs**. RISK can't be reached by scoring badly, and a high
-score can't rescue you out of it.
+Capture accounting is exactly-once. `/checkout/verify` and the `payment.captured` webhook can both confirm the same payment, so each claims it
+with an atomic `UPDATE … WHERE revenue_recorded = false`; the winner does all the accounting. `Order.risk_settled` is a separate claim for the
+failed-payment thread, so a retry that captures releases its risk and books its revenue as two distinct events. `order.status` alone never gates
+money (a past bug did exactly that).
 
-| Tier | Condition |
-|---|---|
-| `NEW` | 0 purchase attempts (only `CAPTURED`/`FAILED` orders count) |
-| `RISK` | any of the three gates below trips |
-| `LOYAL` | score ≥ **70** **and** ≥ **5** attempts |
-| `REGULAR` | score ≥ **40** **and** ≥ **3** attempts |
-| `CASUAL` | everything else with ≥ 1 attempt |
+### Audit ledger
 
-Score and volume are **AND**-ed — a single lucky order can't score its way to the top. Score 95
-with 4 attempts is REGULAR, not LOYAL.
-
-### The RISK gate — three independent paths
-
-Each returns early, so the reason string names the first path that tripped.
-
-| Path | Condition | Default |
-|---|---|---|
-| Permanent fraud flag | any prior order with `failure_reason == risk_block` | all-time, never expires |
-| Attributable failure rate | `attributable_failed / attempts > rate`, ≥ min attempts | 0.60, min 2 |
-| Cancel rate | `explicit_cancels / (cancels + successes) > rate`, ≥ min intents | 0.60, min 2 |
-
-The failure-rate **denominator is all attempts** — including infrastructure-only failures — so a
-network error dilutes the rate rather than driving it.
-
-### The engagement score
-
-A single 0–100 number from five weighted components, hardcoded on purpose:
-
-```
-score = round( 30·completion + 25·frequency + 20·monetary + 15·recency + 10·responsiveness )
-```
-
-| Component | Weight | Formula (each clamped to 0..1) | No-data case |
-|---|---|---|---|
-| **Completion** | 30 | `successes / (successes + attributable_failures + cancels + abandons)` | `0.0` |
-| **Frequency** | 25 | `successes / (tenure_months × 1.0 target orders/mo)`, tenure floored at 1 month | `0.0` |
-| **Monetary** | 20 | `avg_order_value / ₹2,000 target AOV` | `0.0` |
-| **Recency** | 15 | `1 − (days_since_last_purchase / 90)` — linear, not exponential | `0.0` |
-| **Responsiveness** | 10 | `nudges_resumed / (resumed + ignored)` | **`0.5`** |
-
-Every component is a plain linear ratio with a clamp — no decay curves. Responsiveness defaults
-to a neutral **0.5** rather than 0, so never having needed recovery isn't punished.
-
-### Two things the score refuses to count
-
-**Retries collapse into purchase attempts.** Orders group by an order-independent `sku:qty`
-signature, and a `CAPTURED` order closes the run — `FAILED, FAILED, CAPTURED` is **one
-successful attempt**, not a 33% success rate.
-
-**Only customer-attributable failures count against anyone:**
-
-| Attributable (counts) | Not attributable (excluded entirely) |
-|---|---|
-| `insufficient_funds`, `card_expired`, `invalid_card`, `authentication_failed`, `risk_block`, `cancelled` | `network_error`, `bank_decline`, `unknown` |
-
-Excluded reasons are absent from the completion denominator, so an infrastructure failure
-literally **cannot** lower the score.
-
-### Windowing — different on purpose
-
-| What | Window |
-|---|---|
-| Purchase attempts | all-time |
-| Cart behaviour (cancels, abandons, nudge outcomes) | 180 days |
-| Repeat-cancel escalation ladder | 180 days |
-| Incentive frequency cap | 30 days |
-| Drop-off abandonment count | 7 days |
-| Recency decay | 90 days |
-| `risk_block` fraud flag | never expires |
-
-Behaviour is windowed so a customer who cancelled three carts once isn't penalised forever.
-`tiering.py::refresh_tier` is the **only** place a tier is ever persisted.
-
----
-
-## Incentive rules
-
-The discount a customer sees is **fully deterministic** — the LLM is never on this path.
-
-### The percentage is interpolated, not flat
-
-```
-position = clamp( (score − score_band_low) / (score_band_high − score_band_low) )
-pct      = round( pct_low + position × (pct_high − pct_low) )
-```
-
-| Tier | Score band | Discount band | Worked example |
-|---|---|---|---|
-| CASUAL | 0–40 | **0–10%** | score 10 → position 0.25 → **2%** |
-| REGULAR | 40–70 | **10–20%** | score 55 → position 0.5 → **15%** |
-| LOYAL | 70–100 | **20–30%** | score 85 → position 0.5 → **25%** |
-
-The score bands reuse the tier ladder's own thresholds, so retuning one retunes the other.
-
-### Three independent gates, all of which must pass
-
-| Gate | CASUAL | REGULAR | LOYAL | Direction |
-|---|---|---|---|---|
-| Max order value | ₹2,000 | ₹3,000 | ₹4,000 | scales **up** with tier |
-| Max offers per 30 days | 3 | 2 | 1 | deliberately **inverted** |
-| Tier eligibility | ✅ | ✅ | ✅ | NEW and RISK never |
-
-**Frequency caps are inverted** so LOYAL (biggest discount) gets the fewest shots and CASUAL
-(smallest discount) gets the most — otherwise the tier with the most room to exploit frequency,
-discount, and cancel-tolerance together would get all three at once. Net effect: near-equal
-discount exposure per customer per 30 days. **Every value cap sits below the high-value review
-floor (₹5,000)**, so an incentive can never auto-apply where a failure would go to a human. All
-three gates are stored as separate booleans on `CartEvent`, so the insights layer can tell which
-one actually blocked an offer.
-
-**NEW and RISK are hardcoded out, four times over** — an anti-abuse guardrail, not a tunable
-economics parameter: `config.incentive_eligible_tier_set()` intersects against
-`{casual, regular, loyal}`; the runtime live-mutation path applies the same intersection;
-`rules_engine.py` re-checks tier membership; and the pct-band lookup returns `None` for them
-regardless.
-
-### Offers follow the cart
-
-The pinned quantity is the **percentage**, not the amount — `/cart` and `/checkout` re-price
-against the current cart on every read, so they can never disagree.
-
-- **Cart edited above the tier cap** → discount **suspends** (`within_cap: false`). No state is
-  stored about suspension; it snaps back automatically once under the cap again.
-- **Attribution and discount are independent** — an over-cap purchase pays full price but still
-  counts as a recovery.
-- `incentive_final_amount_inr` means **terms actually redeemed**, set only at RESUMED time — a
-  DECLINED offer keeps its stale proposal-time figure and never books `incentive_cost`.
-
-### The repeat-cancel ladder
-
-| Cancel # (within 180 days) | What happens |
-|---|---|
-| 1st / 2nd | Normal per-tier cancel branch — no distinct 2nd-cancel rung |
-| **3rd+** | `escalate_to_human` (0.88), overriding every tier including LOYAL |
-
-Escalated cancels get no resume card by design, so their at-risk money is closed out by the
-maintenance sweep instead.
-
----
-
-## Money: three at-risk buckets
-
-`revenue.py` is a single-row ledger. Every mutation goes through one `adjust()` function, which
-clamps buckets at 0 and writes a `revenue_state_updated` audit entry.
-
-| Field | Meaning |
-|---|---|
-| `total_revenue` | Confirmed captured, all-time |
-| `at_risk_soft` | Silent abandons / nudges — real recovery targets |
-| `at_risk_declined` | Explicit cancels — tracked, weighted down |
-| `at_risk_failed` | Failed payments — its own thread, its own exits |
-| `total_recovered` | At-risk money that later converted |
-| `total_lost` | Given up as unrecoverable |
-| `incentive_cost` | Money given away via discounts |
-
-Derived on read: `total_at_risk` and **`net_recovered = total_recovered − incentive_cost`**.
-
-### The single-exit rule
-
-**Three buckets, three threads — never crossed.** Every at-risk rupee must leave through exactly
-one exit: **recovered** (a capture) or **lost** (declined, expired, superseded, given up, or
-lapsed by the sweep) — which is why the maintenance sweep exists, to close every path that would
-otherwise strand money "at risk" forever.
-
-**At-risk is always booked at full value.** A discount is a cost paid later to recover the
-money, never a reduction in what was at risk — it shows up separately as `incentive_cost` only
-once redeemed.
-
-### Exactly-once, twice over
-
-| Flag | Guards | Why separate |
-|---|---|---|
-| `Order.revenue_recorded` | Capture-side money accounting | Both `/checkout/verify` and the `payment.captured` webhook can confirm the same capture. Claimed atomically by one conditional `UPDATE … WHERE revenue_recorded = false` — whoever wins does *all* the accounting. |
-| `Order.risk_settled` | The failed-payment thread | An order that failed then captured must release its risk *and* book its revenue as two distinct claims — overloading one flag would break the same-order retry case. |
-
-`order.status` alone must **never** gate money — a real past bug had `verify` flip status
-without booking, so the webhook then saw `CAPTURED` and skipped booking too.
-
-**How the failed-payment thread settles:** at-risk is booked once per purchase run (the run's
-"carrier" is the first failure), released by exactly one of: any capture of the same basket
-(→ `total_recovered`), `POST /checkout/give-up-failed` (→ `total_lost`, deliberately writes no
-cart event to avoid double-tracking), or the maintenance sweep's lapse job.
-
-**Cancel consolidation:** an explicit cancel releases all of the customer's open offers and live
-attribution signals, books its own amount, and sends any shortfall (summed released amounts minus
-the new cancel amount) to `total_lost` — the **sum**, not the max, so multiple consolidating
-threads can't drop rupees from the ledger.
-
----
-
-## Audit ledger
-
-Every state change routes through one `write_audit_entry()` call into an append-only table. Rows
-are never updated or deleted.
-
-```
-entry_hash = sha256( prev_hash | sequence_num | action_type | details | timestamp )
-```
-
-The first entry chains from a genesis hash of 64 zeros. **100+ distinct action types** are written
-across the codebase — webhook receipt/rejection, decisions, executed actions, LLM fallbacks,
-cart-event transitions, revenue mutations, tier changes, policy recommendations, scheduled jobs, messages, calls, promises, mandates,
-links and maintenance sweeps. `revenue_state_updated` fires on every single ledger mutation, so money and audit log
-reconcile against each other. The log is also read back, not just written: recovery analysis
-reads `payment_failure_given_up` entries, since "gave up" vs. "silently lapsed" are otherwise
-indistinguishable from the `Order` row alone.
-
-**What `GET /audit/verify` actually proves:** it walks the chain and confirms each entry's
-`prev_hash` matches the previous entry's `entry_hash` — nothing deleted, reordered, or spliced
-in. That's chain-of-custody. It does **not** re-verify each entry's own content hash, so in-place
-tampering with a single row's contents wouldn't be caught — see [Limitations and roadmap](#limitations-and-roadmap).
+Every state change goes through `write_audit_entry()` into an append-only, hash-chained table (118 action types): `entry_hash = sha256(prev_hash |
+sequence_num | action_type | details | timestamp)`, chaining from a genesis of 64 zeros. `revenue_state_updated` fires on every ledger change, so
+money and log reconcile. `GET /audit/verify` walks the chain and proves nothing was deleted, reordered or spliced in. It does **not** recompute
+each entry's own hash, so editing one row in place would go undetected (see [Limitations](#limitations-and-roadmap)).
 
 ---
 
@@ -766,19 +533,7 @@ absolute quality); audio quality, speech-recognition accuracy and latency under 
 
 Optional but recommended once it runs: `python scripts/seed_demo_all.py` (sample data), `python -m evals.run` (13 test suites), `python -m pytest tests`.
 
-### Install and run (reference)
-
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-createdb revenue_recovery
-cp .env.example .env                           # then edit: at least DATABASE_URL (and Razorpay / Groq keys, below)
-cd frontend && npm install && npm run build && cd ..
-uvicorn app.main:app --reload                  # run from the project root; http://localhost:8000
-```
-
-> The frontend build is not optional: FastAPI serves `frontend/dist`, and `app/main.py` mounts it at import time. Re-run `npm run build` after
-> any frontend change — `uvicorn --reload` doesn't. Tables are created on startup (`Base.metadata.create_all`).
+> The frontend build is not optional: FastAPI serves `frontend/dist`. Re-run `npm run build` after any frontend change; `uvicorn --reload` doesn't. Tables are created on startup.
 
 Your connection string depends on how Postgres was installed: Homebrew → `postgresql://<mac-username>@localhost:5432/revenue_recovery`
 (no password); Ubuntu default → `postgresql://postgres:postgres@localhost:5432/revenue_recovery`; Docker → `…postgres:<password>@…`.
