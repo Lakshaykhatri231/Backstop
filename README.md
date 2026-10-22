@@ -732,7 +732,41 @@ absolute quality); audio quality, speech-recognition accuracy and latency under 
 | Node | `^20.19` or `>=22.12` | [nodejs.org](https://nodejs.org) |
 | PostgreSQL | 14+ | macOS: `brew install postgresql@16 && brew services start postgresql@16` |
 
-### Install and run
+### Quick start: run it on your computer (about 10 minutes)
+
+1. **Install the prerequisites** above (Python 3.12+, Node 20.19+ or 22.12+, PostgreSQL 14+) and make sure Postgres is running.
+2. **Get the code and install:**
+   ```bash
+   git clone https://github.com/Lakshaykhatri231/Backstop.git && cd Backstop
+   python3 -m venv venv && source venv/bin/activate          # Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   cd frontend && npm install && npm run build && cd ..       # the build is required: FastAPI serves frontend/dist
+   ```
+3. **Create the database and your `.env`:**
+   ```bash
+   createdb revenue_recovery
+   cp .env.example .env
+   ```
+   Then edit `.env`. The **minimum** is these three lines — everything else has a default:
+   ```bash
+   DATABASE_URL=postgresql://<your-mac-username>@localhost:5432/revenue_recovery   # see the connection table below
+   MERCHANT_EMAIL=you@example.com                                                   # lets you sign in as the merchant
+   MERCHANT_PASSWORD=choose-a-long-password                                         # at least 8 characters
+   ```
+   Optional, each unlocks more: `GROQ_API_KEY` (AI decisions; without it the rules engine decides), `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` /
+   `RAZORPAY_WEBHOOK_SECRET` (real Test Mode checkout, links and autopay), `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` (neural voice).
+4. **Start it (from the project root):**
+   ```bash
+   uvicorn app.main:app --reload
+   ```
+   Wait for `Application startup complete.` The tables and the merchant login are created on this first start. (The first run may take a
+   moment longer: a small local embedding model for the knowledge search is downloaded once.)
+5. **Open <http://localhost:8000/login>**, choose **Merchant**, and sign in with the email and password from step 3. You land on the dashboard.
+   It will be empty on a fresh database — load sample data (next section) to see every screen working.
+
+Optional but recommended once it runs: `python scripts/seed_demo_all.py` (sample data), `python -m evals.run` (13 test suites), `python -m pytest tests`.
+
+### Install and run (reference)
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
