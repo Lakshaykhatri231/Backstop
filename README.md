@@ -165,33 +165,30 @@ LLM layer and no gate — its action is already bounded by the deterministic tie
 
 
 ```mermaid
-flowchart TD
-    subgraph Detect["1. Detect: three signals, three detectors"]
-      F["Payment fails<br/>Razorpay webhook, HMAC-verified"]
-      D["Order created, never paid<br/>drop-off poller, every 10 min"]
-      C["Cart left or cancelled<br/>before any Razorpay order"]
-    end
-    F --> RF["Rules: attempt cap, value, reason code"]
-    D --> RD["Rules: abandonment count in 7 days"]
-    C --> RC["Rules: tier x signal strength<br/>no LLM on this path"]
-    RF & RD --> LLM["LLM refines confidence and wording<br/>action locked to the AgentAction enum"]
-    LLM -- "timeout or bad output" --> FB["Rules result kept<br/>llm_failure_fallback audited"]
-    LLM --> GATE{"Confidence at least 0.70<br/>and not high value?"}
-    FB --> GATE
-    GATE -- no --> HUM["Escalate to a human"]
-    GATE -- yes --> ACT["Action: retry, nudge, reminder,<br/>resume link or tier-based discount"]
-    RC --> ACT
-    ACT --> RISK[("Money sits in an at-risk bucket<br/>soft, declined or failed")]
-    RISK --> CAP{"What happens next?"}
-    CAP -- "payment.captured or verified checkout" --> REC["Recovered<br/>booked exactly once"]
-    CAP -- "give up, offer expired or window lapsed" --> LOST["Lost<br/>closed by the maintenance sweep"]
-    HUM --> AUD
-    REC --> AUD[("Audit log: every step")]
-    LOST --> AUD
+flowchart LR
+    S1["💳 Payment failed"] --> R
+    S2["🛒 Checkout abandoned"] --> R
+    S3["🧺 Cart left or cancelled"] --> R
+    R["① Rules decide<br/>reason · attempts · tier"] --> AI["② AI double-checks<br/>may adjust confidence,<br/>never the action or amount"]
+    AI --> G{"③ Safe to<br/>automate?"}
+    G -- yes --> A["④ Act<br/>retry · reminder · discount"]
+    G -- "unsure or<br/>high value" --> H["👤 Human"]
+    A --> W{"Customer<br/>pays?"}
+    W -- yes --> OK["✅ Recovered"]
+    W -- no --> L["❌ Lost"]
+
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef person fill:#fef3c7,stroke:#d97706,color:#78350f
+    class OK good
+    class L bad
+    class H person
 ```
 
-An action is never reported as "recovered". Only a later capture confirms recovery, and each rupee leaves the at-risk bucket through exactly one
-of the two exits.
+- **Cart events skip step ②**: their action comes straight from the tier rules.
+- **If the AI is down**, the rules' answer is used and the failure is logged.
+- **"Recovered" is counted only when Razorpay confirms the payment**, and each rupee is counted once, either as recovered or as lost.
+- **Every step is written to the audit log.**
 
 ---
 
@@ -312,39 +309,31 @@ deferred, not dropped. A kind with no registered handler is skipped and audited.
 
 ```mermaid
 flowchart TD
-    subgraph Autopay["Card autopay: we decide when, Razorpay moves the money"]
-      A1["Customer authorises a card on Razorpay<br/>Rs 1 check, not revenue"] --> A2["Notice job: debit order with notification<br/>at least 37 h before the debit"]
-      A2 --> A3["Debit job re-checks:<br/>mandate active, run unsettled, no paid link"]
-      A3 --> A4{"Debit result"}
-      A4 -- success --> A5["payment.captured books the revenue"]
-      A4 -- fails --> A6["Run opens: money in at_risk_mandate"]
-      A6 --> A7["Plan: notice at least 24 h ahead,<br/>call about 18 h before, retry at least 25 h out"]
-      A7 --> A8{"Outcome"}
-      A8 -- "retry succeeds" --> A5
-      A8 -- "customer promises a date" --> P
-      A8 -- "token dead or retries used up" --> A9["Re-mandate link"]
-      A9 -- "no new mandate in the window" --> A10["Lost, closed by the sweep"]
-    end
-    subgraph Invoice["B2B invoice: chase ladder"]
-      I1["Invoice with a Razorpay Payment Link<br/>made with the first chase message"] --> I2["Reminders at day -3, 1, 7, 15<br/>from the due date, firmer each step"]
-      I2 --> I3{"Paid?"}
-      I3 -- "in full or in parts, same link" --> I4["Collected"]
-      I3 -- "day 30 unpaid" --> I5["Escalated to finance<br/>a person decides a write-off"]
-    end
-    subgraph Promise["Promise to pay: status overlay, never moves money"]
-      P["Customer names a date<br/>by voice, self-serve page or merchant"] --> P1{"Date valid?<br/>7 days consumer, 30 business"}
-      P1 -- no --> P2["Ask again or hand to a person"]
-      P1 -- yes --> P3["Chasing pauses, link expiry extended,<br/>reminder the day before"]
-      P3 --> P4{"Paid by date plus 1 day grace?"}
-      P4 -- yes --> P5["Promise kept"]
-      P4 -- no --> P6["Broken: chase resumes one step firmer<br/>2 broken promises then a person"]
-    end
-    I2 -. "customer promises" .-> P
-    P6 -.-> A7
-    P6 -.-> I2
+    AU["💳 Card autopay<br/>notice ≥ 24 h, then debit"] --> DB{"Debit<br/>works?"}
+    DB -- yes --> PAID
+    DB -- no --> RUN["Recovery run<br/>SMS → call → retry<br/>up to 4 tries in 10 days"]
+    INV["🧾 Business invoice"] --> LAD["Reminder ladder<br/>day −3 · 1 · 7 · 15"]
+    RUN --> ASK{"Customer<br/>response"}
+    LAD --> ASK
+    ASK -- pays --> PAID["✅ Paid"]
+    ASK -- "names a date" --> PR["🤝 Promise<br/>chasing pauses"]
+    PR -- "pays on time" --> PAID
+    PR -- "misses the date" --> FIRM["Chase resumes<br/>one step firmer"]
+    FIRM --> ASK
+    ASK -- "nothing, all steps used" --> END["Autopay → lost<br/>Invoice → finance team decides"]
+
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef promise fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class PAID good
+    class END bad
+    class PR promise
 ```
 
-All timers are durable `ScheduledAction` rows, claimed atomically so each fires once. Customer-facing steps run only 08:00-19:00 IST.
+- **Promises:** a consumer can promise a date up to 7 days out and a business up to 30. Payment is allowed one day late.
+- **Two broken promises go to a person.** A promise only changes the chasing; it never moves money.
+- **All timers are durable jobs** that each fire exactly once, and no message or call goes out outside 08:00–19:00 IST.
+- **An invoice is never written off automatically.**
 
 ### Card autopay (`autopay.py`, `mandate.py`)
 
@@ -397,36 +386,34 @@ One generic `place_call(subject_type, id)` with adapters for invoices, failed au
 
 ```mermaid
 flowchart TD
-    T["Scheduler places a call:<br/>failed autopay debit, failed order or overdue invoice"] --> G{"Guardrails in code<br/>verified number + customer-ticked consent,<br/>08:00-19:00 IST, 1 call a day, attempt cap, DND"}
-    G -- any fails --> SK["No call, reason audited"]
-    G -- all pass --> O["Fixed opening: 'AI assistant, may be recorded'<br/>in the contact's saved language"]
-    O --> H["Customer speaks<br/>browser VAD + Whisper STT"]
-    H --> SR{"Whole line is a short reply?<br/>haan, nahi, ruko, kya, acha"}
-    SR -- yes --> INT
-    SR -- no --> M["ONE model call per turn:<br/>intent, promise date, candidate reply<br/>sees the debt facts, the conversation, retrieved passages"]
-    M -- "model fails" --> KW["Keyword rules + fixed templates<br/>llm_failure_fallback audited"]
-    M --> INT{"Intent"}
-    KW --> INT
-    INT -- "question: amount, due, how to pay" --> Q["Answer from the debt's real numbers"]
-    INT -- "policy question" --> R["Search approved merchant passages"]
-    INT -- "asks about last call" --> MEM["Search this customer's memory<br/>only with memory consent"]
-    INT -- "promise with a date" --> PR["Deterministic date reader<br/>words win over the model, confirm if unsure"]
-    INT -- "hardship or refusal" --> HS["One kind acknowledgement,<br/>then ask for a date or a person"]
-    INT -- "dispute, complaint, legal" --> HP["Hand to a person"]
-    Q & R & MEM --> V{"Reply checker<br/>only real numbers, no fees or threats,<br/>no links, right language, grounded in a cited passage"}
-    V -- pass --> SP["Speak it: Azure neural voice or browser voice"]
-    V -- reject --> FT["Fixed template or the approved text read aloud"]
-    FT --> SP
-    SP --> H
-    PR --> BK["Promise booked, payment link kept alive"]
-    HS --> H
-    SP -. "6 turns used" .-> HP
-    BK --> END["Closing line, call recorded"]
-    HP --> END
-    END --> MW["Memory written in the background<br/>episode, facts and word-for-word chunks"]
+    D["📞 A debt needs a call"] --> G{"Allowed<br/>to call?"}
+    G -- no --> X["No call<br/>reason logged"]
+    G -- yes --> O["Agent says it is an AI<br/>in the customer's language"]
+    O --> L["🎙️ Customer speaks"]
+    L --> U["Understand<br/>short replies read directly: haan, nahi, ruko<br/>anything longer: one AI call"]
+    U --> K{"What do<br/>they want?"}
+    K -- "asks something" --> AN["Answer from the real bill,<br/>store policy or past calls"]
+    AN --> CHK["✔ Reply checker<br/>real numbers only · no threats or fees<br/>same language"]
+    CHK -- "🔊 speak" --> L
+    K -- "hardship" --> E["Kind reply, then<br/>a date or a person?"]
+    E --> L
+    K -- "will pay on a date" --> P["🤝 Promise booked"]
+    K -- "dispute or complaint" --> HU["👤 Human"]
+    P --> M["Call summary saved<br/>memory only with consent"]
+    HU --> M
+
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef person fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef check fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class P good
+    class HU person
+    class CHK check
 ```
 
-The model never decides money: it classifies and drafts, and code validates every sentence before it is spoken.
+- **Allowed to call** means a verified number, consent the customer gave, 8 am–7 pm IST, at most once a day, and not on the DND list.
+- **If the checker rejects a reply** (or the AI is down), a fixed, pre-written line is spoken instead.
+- **After 6 turns without a decision**, the call goes to a person.
+- **A spoken date is read by rules**, and the agent confirms it if unsure ("shall I note 12 Oct?").
 
 **Guardrails (hardcoded):** verified number + customer-ticked consent · 08:00–19:00 IST · one call a day · attempt cap · DND registry check.
 Consumer calls are for failed payments only (never abandoned carts) above a minimum value. A "dispute" on a mandate call is an
