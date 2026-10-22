@@ -202,18 +202,52 @@ The LLM can only return one of nine `AgentAction` values; the scheduler-only act
 ### Customer tiering
 
 Tiers decide how much recovery effort a customer is worth. They are driven by an **engagement score**, not payment success rate, which
-punished the customers who retried hardest (`FAILED, FAILED, CAPTURED` scored 33%).
+punished the customers who retried hardest (`FAILED, FAILED, CAPTURED` scored 33%). `NEW` and `RISK` are **states**, not rungs: a low score
+can't reach RISK and a high score can't rescue you from it.
 
-- **Order of evaluation:** `NEW` (no attempts) → `RISK` (an enforcement gate, checked before the score) → `CASUAL` → `REGULAR` (score ≥ 40 and
-  ≥ 3 attempts) → `LOYAL` (score ≥ 70 and ≥ 5 attempts). Score and volume are AND-ed, so one lucky order can't reach the top.
-- **RISK trips on any of:** a prior `risk_block` (never expires), attributable failure rate > 0.60, or cancel rate > 0.60 (both need ≥ 2 attempts).
-- **Score (0–100):** `30·completion + 25·frequency + 20·monetary + 15·recency + 10·responsiveness`. Each part is a clamped linear ratio; the
-  weights are hardcoded on purpose. Responsiveness defaults to a neutral 0.5 so never needing recovery isn't punished.
-- **Retries collapse into one purchase attempt** (grouped by an order-independent `sku:qty` signature; a capture closes the run).
-- **Only customer-attributable failures count** (`insufficient_funds`, `card_expired`, `invalid_card`, `authentication_failed`, `risk_block`,
-  `cancelled`). `network_error`, `bank_decline` and `unknown` are excluded from the denominator, so infrastructure cannot lower a score.
-- **Behaviour is windowed** (cancels, abandons, nudge outcomes: 180 days) so a customer isn't penalised forever. `tiering.py::refresh_tier` is the
-  only place a tier is persisted, which keeps `tier_changed` auditing complete.
+```mermaid
+flowchart TD
+    A([Customer's orders and cart behaviour]) --> B{Any purchase attempts?<br/>only CAPTURED / FAILED count}
+    B -- none --> NEW[NEW]
+    B -- yes --> C{RISK gate: any of three trips?}
+    C -- "prior risk_block<br/>(never expires)" --> RISK[RISK]
+    C -- "attributable failure rate &gt; 0.60<br/>(≥ 2 attempts)" --> RISK
+    C -- "cancel rate &gt; 0.60<br/>(≥ 2 intents)" --> RISK
+    C -- none trip --> S[Compute engagement score 0-100]
+    S --> D{score ≥ 70<br/>and ≥ 5 attempts?}
+    D -- yes --> LOYAL[LOYAL<br/>discount 20-30%, 1 offer / 30d]
+    D -- no --> E{score ≥ 40<br/>and ≥ 3 attempts?}
+    E -- yes --> REG[REGULAR<br/>discount 10-20%, 2 offers / 30d]
+    E -- no --> CAS[CASUAL<br/>discount 0-10%, 3 offers / 30d]
+    NEW -. no incentive .-> X[Never offered a discount]
+    RISK -. no incentive .-> X
+```
+
+**The formula** (0-100, weights hardcoded on purpose):
+
+```
+score = round( 30·completion + 25·frequency + 20·monetary + 15·recency + 10·responsiveness )
+```
+
+| Component | Weight | Each clamped to 0..1 | No data |
+|---|---|---|---|
+| Completion | 30 | `successes / (successes + attributable failures + cancels + abandons)` | 0 |
+| Frequency | 25 | `successes / (tenure months × 1 target order/month)`, tenure at least 1 month | 0 |
+| Monetary | 20 | `average order value / ₹2,000` | 0 |
+| Recency | 15 | `1 − days since last purchase / 90` | 0 |
+| Responsiveness | 10 | `nudges resumed / (resumed + ignored)` | 0.5 (neutral) |
+
+Example: 4 successes, 1 cancel in 2 months, average order ₹1,500, last purchase 18 days ago, no nudges →
+completion 0.8, frequency 1.0 (2 orders/month, clamped), monetary 0.75, recency 0.8, responsiveness 0.5 →
+`24 + 25 + 15 + 12 + 5 = 81`, but only 4 attempts, so **REGULAR** (LOYAL needs 5).
+
+**What the score refuses to count**
+
+- **Retries are one attempt.** Orders group by an order-independent `sku:qty` signature and a capture closes the run.
+- **Only customer-attributable failures count** (`insufficient_funds`, `card_expired`, `invalid_card`, `authentication_failed`,
+  `risk_block`, `cancelled`). `network_error`, `bank_decline` and `unknown` are excluded from the denominator, so infrastructure cannot lower a score.
+- **Behaviour is windowed** (cancels, abandons, nudge outcomes: 180 days), so a customer isn't penalised forever. `tiering.py::refresh_tier` is
+  the only place a tier is persisted, which keeps `tier_changed` auditing complete.
 
 ### Incentives
 
