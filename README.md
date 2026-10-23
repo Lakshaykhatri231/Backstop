@@ -164,29 +164,127 @@ Every signal follows the same sequence: **record event → deterministic rules d
 LLM layer and no gate — its action is already bounded by the deterministic tier formula.
 
 
-```mermaid
-flowchart LR
-    S1["💳 Payment failed"] --> R
-    S2["🛒 Checkout abandoned"] --> R
-    S3["🧺 Cart left or cancelled"] --> R
-    R["① Rules decide<br/>reason · attempts · tier"] --> AI["② AI double-checks<br/>may adjust confidence,<br/>never the action or amount"]
-    AI --> G{"③ Safe to<br/>automate?"}
-    G -- yes --> A["④ Act<br/>retry · reminder · discount"]
-    G -- "unsure or<br/>high value" --> H["👤 Human"]
-    A --> W{"Customer<br/>pays?"}
-    W -- yes --> OK["✅ Recovered"]
-    W -- no --> L["❌ Lost"]
+### The customer's journey in the store
 
+What a shopper goes through after adding items to a cart, and how each of the three ways it can go ends. This is the same diagram as the
+**Architecture** page of the website (`/architecture`).
+
+```mermaid
+flowchart TD
+    START(["Customer logs in"]) --> CART["Adds items to cart"]
+    CART --> FORK{"What happens<br/>to the cart?"}
+    FORK -- times out --> T1
+    FORK -- cancels --> C1
+    FORK -- pays --> P1
+
+    subgraph TO["Timeout"]
+      T1["Silent abandon recorded<br/>cart sits idle past the nudge window"] --> T2["Rules engine sends a nudge or tier discount<br/>only if the tier is incentive-eligible"]
+      T2 --> T3{"Resumes in time?"}
+      T3 -- yes --> TR(["Recovered"])
+      T3 -- expires --> TL(["Lost"])
+    end
+
+    subgraph CA["Cancelled"]
+      C1["Explicit cancel: cart snapshot saved<br/>the cart is stored before it is cleared"] --> C2{"3rd or later cancel?"}
+      C2 -- yes --> CE(["Escalated"])
+      C2 -- no --> C3{"Tier eligible?"}
+      C3 -- "NEW / RISK" --> CL1(["Lost"])
+      C3 -- eligible --> C4["Snapshot resurfaces on every /cart visit<br/>discount if eligible, plain resume link if not,<br/>until it expires"]
+      C4 --> C5{"Acts before expiry?"}
+      C5 -- resumes --> CR(["Recovered"])
+      C5 -- declines --> CL2(["Lost"])
+    end
+
+    subgraph PA["Payment initiated"]
+      P1["Order created, payment attempted<br/>attempt count rebuilt from earlier<br/>failed orders on this basket"] --> P2{"Gateway result?"}
+      P2 -- captured --> PR(["Recovered"])
+      P2 -- fails --> P3["Rules engine picks the next action<br/>risk_block or a high-value amount escalates at once"]
+      P3 --> P4{"Next action?"}
+      P4 -- "retry_now or retry_later" --> P1
+      P4 -- exhausted --> PE(["Escalated"])
+      P4 -- "customer gives up" --> PL(["Lost"])
+    end
+
+    T1 ~~~ C1
+    C1 ~~~ P1
+
+    classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
     classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    classDef person fill:#fef3c7,stroke:#d97706,color:#78350f
-    class OK good
-    class L bad
-    class H person
+    classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    class START start
+    class CART,T1,T2,C1,C4,P1,P3 step
+    class FORK,T3,C2,C3,C5,P2,P4 ask
+    class TR,CR,PR good
+    class TL,CL1,CL2,PL bad
+    class CE,PE person
 ```
 
-- **Cart events skip step ②**: their action comes straight from the tier rules.
+🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. Retries loop back until the order is paid, runs out of attempts, or the
+customer gives up. "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its
+`risk_settled` flag changes.
+
+### The decision pipeline
+
+The same story from the system's side: what happens when a revenue leak is detected. Payment failures and checkout drop-offs share one
+pipeline (rules, then the AI, then a confidence gate, then the action). A cart event is shorter: no Razorpay order exists yet, so it is
+rules only, with no AI and no gate.
+
+```mermaid
+flowchart TD
+    LEAK(["Revenue leak"]) --> SRC{"Which source<br/>detected it?"}
+    SRC -- "payment failure" --> W["Payment webhook"]
+    SRC -- "checkout stuck at attempted" --> POLL["Background poller"]
+    SRC -- "silent_abandon / explicit_cancel" --> CE
+
+    subgraph SH["Payment failures and checkout drop-offs share one pipeline"]
+      W --> EV1["Event + Decision row created<br/>something Razorpay itself told us"]
+      POLL --> EV2["Event + Decision row created<br/>synthesised from order state, not a webhook"]
+      EV1 --> RULES
+      EV2 --> RULES["Rules engine picks action, confidence, reasoning<br/>rule_based_decision() or rule_based_dropoff_decision()"]
+      RULES --> LLM["Sent to the LLM<br/>Groq, function-calling, 8 s timeout"]
+      LLM --> OK{"LLM call<br/>succeeds?"}
+      OK -- "fails: rules' pick unchanged" --> GATE
+      OK -- yes --> CMP{"LLM vs<br/>rules' pick?"}
+      CMP -- "confirms exactly" --> GATE
+      CMP -- "adjusts confidence / reasoning" --> GATE
+      CMP -- "different action (rare)" --> GATE
+      GATE{"Confidence above<br/>the threshold?"}
+      GATE -- "passes, or exempt" --> EXEC["execute_action() runs the chosen action"]
+      GATE -- "below threshold" --> ESC["Forced to escalate_to_human<br/>still runs through execute_action()"]
+      ESC --> EXEC
+      EXEC --> AUD["Audited<br/>decision_made, then action_executed"]
+    end
+
+    subgraph CT["Storefront cart event: shorter, rules only"]
+      CE["CartEvent row created<br/>silent_abandon or explicit_cancel"] --> CR["Rules engine picks action, confidence, reasoning<br/>rule_based_cart_event_decision(), fully deterministic"]
+      CR --> NL["No LLM layer<br/>deliberately no model in the loop"]
+      NL --> NG["No gate<br/>the action is already bounded by the tier formula"]
+      NG --> AUD2["Audited<br/>cart_event_detected, then cart_event_action_executed"]
+    end
+
+    POLL ~~~ CE
+
+    classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class LEAK start
+    class W,POLL,EV1,EV2,RULES,EXEC,CE,CR,NL,NG step
+    class SRC,OK,CMP,GATE ask
+    class LLM ai
+    class ESC person
+    class AUD,AUD2 log
+```
+
+- **The AI only refines.** It can confirm the rules' pick or adjust its confidence and reasoning; the action is locked to a fixed list.
 - **If the AI is down**, the rules' answer is used and the failure is logged.
+- **Escalation is executed too.** Falling below the confidence threshold swaps the action to `escalate_to_human` first, then both branches run the
+  same `execute_action()` and write the same audit entries.
 - **"Recovered" is counted only when Razorpay confirms the payment**, and each rupee is counted once, either as recovered or as lost.
 - **Every step is written to the audit log.**
 
@@ -286,6 +384,71 @@ restores it once back under); an over-cap purchase still counts as a recovery at
 explicit cancels each have their **own at-risk bucket and thread, never crossed**. Every rupee that enters an at-risk bucket leaves through
 exactly one exit: **recovered** (a capture) or **lost** (declined, expired, superseded, given up, or lapsed by the maintenance sweep). At-risk is
 always booked at full value; a discount appears later as `incentive_cost`. `net_recovered = total_recovered − incentive_cost`.
+
+Where each bucket's money ends up (the same three lanes as the Architecture page):
+
+*Silent abandon*
+
+```mermaid
+flowchart LR
+    S1["Booked at full value<br/>a discount offered later never shrinks this figure"] --> S2[("At risk: real recovery targets<br/>at_risk_soft")]
+    S2 --> S3{"Recovered<br/>or lost?"}
+    S3 -- "cart resumes and captures" --> S4(["Recovered"])
+    S3 -- "declined, expired, or the sweep lapses it" --> S5(["Lost"])
+
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class S1 step
+    class S2 store
+    class S3 ask
+    class S4 good
+    class S5 bad
+```
+
+*Explicit cancel*
+
+```mermaid
+flowchart LR
+    X1["Booked at full value<br/>consolidates every open offer and signal for the customer"] --> X2[("At risk: declined carts<br/>at_risk_declined")]
+    X2 --> X3{"Recovered<br/>or lost?"}
+    X3 -- "cart resumes and captures" --> X4(["Recovered"])
+    X3 -- "consolidation shortfall, or it lapses" --> X5(["Lost"])
+
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class X1 step
+    class X2 store
+    class X3 ask
+    class X4 good
+    class X5 bad
+```
+
+*Payment failure*
+
+```mermaid
+flowchart LR
+    F1["Booked at full value<br/>one booking per run, guarded by Order.risk_settled"] --> F2[("At risk: failed payments<br/>at_risk_failed")]
+    F2 --> F3{"Recovered<br/>or lost?"}
+    F3 -- "same or new order captures" --> F4(["Recovered"])
+    F3 -- "give-up button, or the sweep lapses it" --> F5(["Lost"])
+
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class F1 step
+    class F2 store
+    class F3 ask
+    class F4 good
+    class F5 bad
+```
 
 Capture accounting is exactly-once. `/checkout/verify` and the `payment.captured` webhook can both confirm the same payment, so each claims it
 with an atomic `UPDATE … WHERE revenue_recorded = false`; the winner does all the accounting. `Order.risk_settled` is a separate claim for the
