@@ -385,54 +385,54 @@ resumes "one step firmer", measured from the invoice's age on the ladder.
 One generic `place_call(subject_type, id)` with adapters for invoices, failed autopay debits and failed storefront orders.
 
 ```mermaid
-flowchart TD
-    MIC["① 🎙️ Browser mic + Silero VAD<br/>cuts speech into a clip · barge-in"]
-    STT["② Speech to text<br/>drops blips, silence, phantom phrases"]
-    SR{"③ Short reply?<br/>haan · nahi · ruko"}
-    RAG["④ Retrieve context · RAG<br/>hybrid search: vector + keyword, RRF"]
-    LLM["⑤ ONE model call per turn<br/>intent · promise date · draft reply · sources"]
-    CHK["⑥ Reply checker<br/>real numbers · no fees or threats<br/>right language · grounded"]
-    FIX["Fixed, pre-written line<br/>or approved policy text"]
-    TTS["⑦ Text to speech<br/>Dragon HD voice<br/>gentle: 3% slower + short pauses · brief: 6% quicker"]
-    PLAY["🔊 Browser plays the reply"]
-    TURNS[("⑧ voice_turns<br/>transcript + timings<br/>→ summarised into memory after the call")]
-    PROF[("Customer profile · built at call start<br/>approach · usual pay day · call time<br/>from our records + consented facts")]
+flowchart LR
+    subgraph A["1 · Before the call"]
+      direction TB
+      REC["Our records<br/>promises kept or missed"]
+      MEM[("Customer memory<br/>past calls · facts<br/>only if they agreed")]
+      PROF["Customer profile<br/>how to talk to this person"]
+      REC --> PROF
+      MEM --> PROF
+    end
 
-    W(["Groq Whisper large-v3<br/>language fixed per call"])
-    KB[("Knowledge store<br/>merchant policy · EN / Hinglish / Hindi")]
-    MEM[("Customer memory<br/>facts · past calls · verbatim chunks<br/>written after each call · consent only")]
-    G(["Groq gpt-oss-120b<br/>forced tool call"])
-    AZ(["Azure Neural TTS<br/>Dragon HD Meera<br/>Neerja as fallback"])
+    subgraph B["2 · Every turn of the call (repeats until it ends)"]
+      direction TB
+      L["Listen<br/>mic → Whisper → text"]
+      U["Understand<br/>short replies by rules,<br/>else one AI call"]
+      KB[("Store policy<br/>approved answers")]
+      C["Check the reply<br/>numbers · wording · language"]
+      S["Speak<br/>Azure Dragon HD voice"]
+      L --> U
+      KB --> U
+      U --> C --> S
+    end
 
-    PROF -- "every turn, short replies too" --> SR
-    PROF -- "approach line in the prompt" --> LLM
-    PROF -- "pace, pauses, fillers" --> TTS
-    MIC -- "audio clip" --> STT
-    STT <--> W
-    STT -- "text" --> SR
-    SR -- "yes: no model needed" --> FIX
-    SR -- no --> RAG
-    KB --> RAG
-    MEM -- "core card always,<br/>past calls on a cue" --> RAG
-    RAG --> LLM
-    LLM <--> G
-    LLM --> CHK
-    CHK -- pass --> TTS
-    CHK -- reject --> FIX
-    FIX --> TTS
-    TTS <--> AZ
-    TTS --> PLAY
-    TTS --> TURNS
+    subgraph D["3 · After the call"]
+      direction TB
+      R["Call saved<br/>transcript + outcome"]
+      SUM["Summary and facts<br/>saved to memory<br/>for the next call"]
+      R --> SUM
+    end
 
-    classDef ext fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    A ==>|"tone · usual date · pace"| B
+    B ==>|"call ends"| D
+
     classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
     classDef guard fill:#fef3c7,stroke:#d97706,color:#78350f
-    class W,G,AZ ext
-    class KB,MEM,TURNS,PROF store
-    class CHK,FIX guard
+    class MEM,KB store
+    class L,U,S ai
+    class C guard
 ```
 
-🟣 external AI service · 🔵 PostgreSQL (pgvector) store · 🟠 safety path. The numbers show the order of the main path (the profile is read at every step); after ⑦ the next turn starts again at ①.
+🟣 uses an outside AI service (Whisper, Groq, Azure) · 🔵 stored data (PostgreSQL) · 🟠 safety check
+
+**Reading it left to right:**
+1. **Before the call**, the system reads what we know about this customer (our own records, plus their memory if they agreed) and boils it down to a short profile: how to talk to them.
+2. **During the call**, every turn is the same four steps: listen, understand, check the reply, speak. The profile shapes the tone, the date it suggests and the pace; the store policy supplies approved answers; the customer's memory is searched if they ask about an earlier call.
+3. **After the call**, the conversation is saved and a summary goes into memory, so the next call starts better informed.
+
+The numbered list below goes through each step in detail.
 
 **How one turn flows**
 
