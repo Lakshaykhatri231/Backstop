@@ -172,7 +172,7 @@ What a shopper goes through after adding items to a cart, and how each of the th
 <p align="center"><a href="docs/diagrams/customer-journey.png"><img src="docs/diagrams/customer-journey.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="480"></a></p>
 <p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/customer-journey.mmd</code></sub></p>
 
-🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. Retries loop back until the order is paid, runs out of attempts, or the
+🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. A retry goes back to "order created, payment attempted" and repeats until the order is paid, runs out of attempts, or the
 customer gives up. "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its
 `risk_settled` flag changes.
 

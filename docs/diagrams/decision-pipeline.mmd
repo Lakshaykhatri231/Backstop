@@ -1,4 +1,4 @@
-%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','lineColor':'#475569'},'flowchart':{'nodeSpacing':20,'rankSpacing':22,'padding':8,'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','lineColor':'#475569'},'flowchart':{'curve':'linear','nodeSpacing':20,'rankSpacing':22,'padding':8,'htmlLabels':true}}}%%
 flowchart TD
     LEAK(["Revenue leak"])
     SRC{"Which source<br/>detected it?"}
@@ -56,6 +56,7 @@ flowchart TD
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
     classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef loop fill:#f1f5f9,stroke:#64748b,stroke-dasharray:4 3,color:#334155
     classDef tag fill:#ffffff,stroke:#94a3b8,color:#334155,font-size:12px
     class LEAK start
     class W,POLL,EV1,EV2,RULES,EXEC step

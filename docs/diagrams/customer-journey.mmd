@@ -1,4 +1,4 @@
-%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','lineColor':'#475569'},'flowchart':{'nodeSpacing':20,'rankSpacing':22,'padding':8,'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','lineColor':'#475569'},'flowchart':{'curve':'linear','nodeSpacing':20,'rankSpacing':22,'padding':8,'htmlLabels':true}}}%%
 flowchart TD
     START(["Customer logs in"])
     CART["Adds items to cart"]
@@ -25,6 +25,7 @@ flowchart TD
     PR(["Recovered"])
     P3["Rules engine picks<br/>the next action"]
     P4{"Next<br/>action?"}
+    RT(["Back to: order created,<br/>payment attempted"])
     PE(["Escalated"])
     PL(["Lost"])
     START --> CART
@@ -65,7 +66,7 @@ flowchart TD
     L13 --> P3
     P3 --> P4
     P4 --> L14(["retry"])
-    L14 --> P1
+    L14 --> RT
     P4 --> L15(["exhausted"])
     L15 --> PE
     P4 --> L16(["gives up"])
@@ -83,6 +84,7 @@ flowchart TD
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
     classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef loop fill:#f1f5f9,stroke:#64748b,stroke-dasharray:4 3,color:#334155
     classDef tag fill:#ffffff,stroke:#94a3b8,color:#334155,font-size:12px
     class START start
     class TH,CH,PH head
@@ -91,4 +93,5 @@ flowchart TD
     class TR,CR,PR good
     class TL,CL1,CL2,PL bad
     class CE,PE person
+    class RT loop
     class L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12,L13,L14,L15,L16 tag
