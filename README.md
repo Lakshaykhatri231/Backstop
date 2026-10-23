@@ -169,59 +169,8 @@ LLM layer and no gate — its action is already bounded by the deterministic tie
 What a shopper goes through after adding items to a cart, and how each of the three ways it can go ends. This is a compact version of the diagram on the
 **Architecture** page of the website (`/architecture`), which has the full detail.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','edgeLabelBackground':'#ffffff','lineColor':'#475569','clusterBkg':'#f8fafc','clusterBorder':'#cbd5e1'},'flowchart':{'nodeSpacing':22,'rankSpacing':26,'padding':8,'htmlLabels':true}}}%%
-flowchart TD
-    START(["Customer logs in"]) --> CART["Adds items to cart"]
-    CART --> FORK{"What happens<br/>to the cart?"}
-    FORK -- times out --> T1
-    FORK -- cancels --> C1
-    FORK -- pays --> P1
-
-    subgraph TO["Timeout"]
-      T1["Silent abandon recorded"] --> T2["Nudge or tier discount<br/>(if tier is eligible)"]
-      T2 --> T3{"Resumes<br/>in time?"}
-      T3 -- yes --> TR(["Recovered"])
-      T3 -- expires --> TL(["Lost"])
-    end
-
-    subgraph CA["Cancelled"]
-      C1["Explicit cancel<br/>cart snapshot saved"] --> C2{"3rd or later<br/>cancel?"}
-      C2 -- yes --> CE(["Escalated"])
-      C2 -- no --> C3{"Tier<br/>eligible?"}
-      C3 -- "NEW / RISK" --> CL1(["Lost"])
-      C3 -- eligible --> C4["Snapshot resurfaces on<br/>every /cart visit"]
-      C4 --> C5{"Acts before<br/>expiry?"}
-      C5 -- resumes --> CR(["Recovered"])
-      C5 -- declines --> CL2(["Lost"])
-    end
-
-    subgraph PA["Payment initiated"]
-      P1["Order created,<br/>payment attempted"] --> P2{"Gateway<br/>result?"}
-      P2 -- captured --> PR(["Recovered"])
-      P2 -- fails --> P3["Rules engine picks<br/>the next action"]
-      P3 --> P4{"Next<br/>action?"}
-      P4 -- "retry" --> P1
-      P4 -- exhausted --> PE(["Escalated"])
-      P4 -- "gives up" --> PL(["Lost"])
-    end
-
-    T1 ~~~ C1
-    C1 ~~~ P1
-
-    classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
-    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
-    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
-    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
-    class START start
-    class CART,T1,T2,C1,C4,P1,P3 step
-    class FORK,T3,C2,C3,C5,P2,P4 ask
-    class TR,CR,PR good
-    class TL,CL1,CL2,PL bad
-    class CE,PE person
-```
+<p align="center"><a href="docs/diagrams/customer-journey.png"><img src="docs/diagrams/customer-journey.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="600"></a></p>
+<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/customer-journey.mmd</code></sub></p>
 
 🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. Retries loop back until the order is paid, runs out of attempts, or the
 customer gives up. "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its
@@ -233,51 +182,8 @@ The same story from the system's side (compact; the website page shows every bra
 pipeline (rules, then the AI, then a confidence gate, then the action). A cart event is shorter: no Razorpay order exists yet, so it is
 rules only, with no AI and no gate.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','edgeLabelBackground':'#ffffff','lineColor':'#475569','clusterBkg':'#f8fafc','clusterBorder':'#cbd5e1'},'flowchart':{'nodeSpacing':22,'rankSpacing':26,'padding':8,'htmlLabels':true}}}%%
-flowchart TD
-    LEAK(["Revenue leak"]) --> SRC{"Which source<br/>detected it?"}
-    SRC -- "payment failure" --> W["Payment webhook"]
-    SRC -- "checkout stuck" --> POLL["Background poller"]
-    SRC -- "cart event" --> CE
-
-    subgraph SH["Payment failures and checkout drop-offs"]
-      W --> EV1["Event + Decision row<br/>told to us by Razorpay"]
-      POLL --> EV2["Event + Decision row<br/>built from order state"]
-      EV1 --> RULES
-      EV2 --> RULES["Rules engine picks action,<br/>confidence, reasoning"]
-      RULES --> LLM["LLM (Groq, 8 s timeout)"]
-      LLM --> OK{"LLM call<br/>succeeds?"}
-      OK -- "no: keep rules' pick" --> GATE
-      OK -- yes --> GATE{"Confidence above<br/>the threshold?"}
-      GATE -- "yes, or exempt" --> EXEC["execute_action()"]
-      GATE -- "no" --> ESC["Forced to<br/>escalate_to_human"]
-      ESC --> EXEC
-      EXEC --> AUD["Audited"]
-    end
-
-    subgraph CT["Cart event"]
-      CE["CartEvent row created"] --> CR["Rules engine picks action<br/>(deterministic)"]
-      CR --> NL["No LLM layer"]
-      NL --> NG["No gate"]
-      NG --> AUD2["Audited"]
-    end
-
-    POLL ~~~ CE
-
-    classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
-    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
-    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
-    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
-    classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
-    classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
-    class LEAK start
-    class W,POLL,EV1,EV2,RULES,EXEC,CE,CR,NL,NG step
-    class SRC,OK,GATE ask
-    class LLM ai
-    class ESC person
-    class AUD,AUD2 log
-```
+<p align="center"><a href="docs/diagrams/decision-pipeline.png"><img src="docs/diagrams/decision-pipeline.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="420"></a></p>
+<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/decision-pipeline.mmd</code></sub></p>
 
 - **The AI only refines.** It can confirm the rules' pick or adjust its confidence and reasoning; the action is locked to a fixed list.
 - **If the AI is down**, the rules' answer is used and the failure is logged.

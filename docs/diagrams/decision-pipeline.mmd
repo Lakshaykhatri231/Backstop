@@ -1,0 +1,43 @@
+%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','edgeLabelBackground':'#ffffff','lineColor':'#475569','clusterBkg':'#f8fafc','clusterBorder':'#cbd5e1'},'flowchart':{'nodeSpacing':22,'rankSpacing':26,'padding':8,'htmlLabels':true}}}%%
+flowchart TD
+    LEAK(["Revenue leak"]) --> SRC{"Which source<br/>detected it?"}
+    SRC -- "payment failure" --> W["Payment webhook"]
+    SRC -- "checkout stuck" --> POLL["Background poller"]
+    SRC -- "cart event" --> CE
+
+    subgraph SH["Payment failures and checkout drop-offs"]
+      W --> EV1["Event + Decision row<br/>told to us by Razorpay"]
+      POLL --> EV2["Event + Decision row<br/>built from order state"]
+      EV1 --> RULES
+      EV2 --> RULES["Rules engine picks action,<br/>confidence, reasoning"]
+      RULES --> LLM["LLM (Groq, 8 s timeout)"]
+      LLM --> OK{"LLM call<br/>succeeds?"}
+      OK -- "no: keep rules' pick" --> GATE
+      OK -- yes --> GATE{"Confidence above<br/>the threshold?"}
+      GATE -- "yes, or exempt" --> EXEC["execute_action()"]
+      GATE -- "no" --> ESC["Forced to<br/>escalate_to_human"]
+      ESC --> EXEC
+      EXEC --> AUD["Audited"]
+    end
+
+    subgraph CT["Cart event"]
+      CE["CartEvent row created"] --> CR["Rules engine picks action<br/>(deterministic)"]
+      CR --> NL["No LLM layer"]
+      NL --> NG["No gate"]
+      NG --> AUD2["Audited"]
+    end
+
+    POLL ~~~ CE
+
+    classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+    classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class LEAK start
+    class W,POLL,EV1,EV2,RULES,EXEC,CE,CR,NL,NG step
+    class SRC,OK,GATE ask
+    class LLM ai
+    class ESC person
+    class AUD,AUD2 log
