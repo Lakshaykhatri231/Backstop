@@ -1,46 +1,89 @@
-%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','edgeLabelBackground':'#ffffff','lineColor':'#475569'},'flowchart':{'nodeSpacing':22,'rankSpacing':26,'padding':8,'htmlLabels':true}}}%%
+%%{init: {'theme':'base','themeVariables':{'fontSize':'13px','lineColor':'#475569'},'flowchart':{'nodeSpacing':20,'rankSpacing':22,'padding':8,'htmlLabels':true}}}%%
 flowchart TD
-    START(["Customer logs in"]) --> CART["Adds items to cart"]
-    CART --> FORK{"What happens<br/>to the cart?"}
-    FORK -- times out --> TH(["TIMEOUT"])
-    FORK -- cancels --> CH(["CANCELLED"])
-    FORK -- pays --> PH(["PAYMENT INITIATED"])
-
-    TH --> T1["Silent abandon recorded"]
-    T1 --> T2["Nudge or tier discount<br/>(if tier is eligible)"]
-    T2 --> T3{"Resumes<br/>in time?"}
-    T3 -- yes --> TR(["Recovered"])
-    T3 -- expires --> TL(["Lost"])
-
-    CH --> C1["Explicit cancel<br/>cart snapshot saved"]
-    C1 --> C2{"3rd or later<br/>cancel?"}
-    C2 -- yes --> CE(["Escalated"])
-    C2 -- no --> C3{"Tier<br/>eligible?"}
-    C3 -- "NEW / RISK" --> CL1(["Lost"])
-    C3 -- eligible --> C4["Snapshot resurfaces on<br/>every /cart visit"]
-    C4 --> C5{"Acts before<br/>expiry?"}
-    C5 -- resumes --> CR(["Recovered"])
-    C5 -- declines --> CL2(["Lost"])
-
-    PH --> P1["Order created,<br/>payment attempted"]
-    P1 --> P2{"Gateway<br/>result?"}
-    P2 -- captured --> PR(["Recovered"])
-    P2 -- fails --> P3["Rules engine picks<br/>the next action"]
-    P3 --> P4{"Next<br/>action?"}
-    P4 -- "retry" --> P1
-    P4 -- exhausted --> PE(["Escalated"])
-    P4 -- "gives up" --> PL(["Lost"])
-
+    START(["Customer logs in"])
+    CART["Adds items to cart"]
+    FORK{"What happens<br/>to the cart?"}
+    TH(["TIMEOUT"])
+    CH(["CANCELLED"])
+    PH(["PAYMENT INITIATED"])
+    T1["Silent abandon recorded"]
+    T2["Nudge or tier discount<br/>(if tier is eligible)"]
+    T3{"Resumes<br/>in time?"}
+    TR(["Recovered"])
+    TL(["Lost"])
+    C1["Explicit cancel<br/>cart snapshot saved"]
+    C2{"3rd or later<br/>cancel?"}
+    CE(["Escalated"])
+    C3{"Tier<br/>eligible?"}
+    CL1(["Lost"])
+    C4["Snapshot resurfaces on<br/>every /cart visit"]
+    C5{"Acts before<br/>expiry?"}
+    CR(["Recovered"])
+    CL2(["Lost"])
+    P1["Order created,<br/>payment attempted"]
+    P2{"Gateway<br/>result?"}
+    PR(["Recovered"])
+    P3["Rules engine picks<br/>the next action"]
+    P4{"Next<br/>action?"}
+    PE(["Escalated"])
+    PL(["Lost"])
+    START --> CART
+    CART --> FORK
+    FORK --> L1(["times out"])
+    L1 --> TH
+    FORK --> L2(["cancels"])
+    L2 --> CH
+    FORK --> L3(["pays"])
+    L3 --> PH
+    TH --> T1
+    T1 --> T2
+    T2 --> T3
+    T3 --> L4(["yes"])
+    L4 --> TR
+    T3 --> L5(["expires"])
+    L5 --> TL
+    CH --> C1
+    C1 --> C2
+    C2 --> L6(["yes"])
+    L6 --> CE
+    C2 --> L7(["no"])
+    L7 --> C3
+    C3 --> L8(["NEW / RISK"])
+    L8 --> CL1
+    C3 --> L9(["eligible"])
+    L9 --> C4
+    C4 --> C5
+    C5 --> L10(["resumes"])
+    L10 --> CR
+    C5 --> L11(["declines"])
+    L11 --> CL2
+    PH --> P1
+    P1 --> P2
+    P2 --> L12(["captured"])
+    L12 --> PR
+    P2 --> L13(["fails"])
+    L13 --> P3
+    P3 --> P4
+    P4 --> L14(["retry"])
+    L14 --> P1
+    P4 --> L15(["exhausted"])
+    L15 --> PE
+    P4 --> L16(["gives up"])
+    L16 --> PL
     TH ~~~ CH
     CH ~~~ PH
 
     classDef start fill:#e2e8f0,stroke:#475569,color:#0f172a
     classDef head fill:#1e1b4b,stroke:#1e1b4b,color:#ffffff
     classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef cart fill:#ccfbf1,stroke:#0d9488,color:#134e4a
     classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
     classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     classDef person fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef log fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    classDef tag fill:#ffffff,stroke:#94a3b8,color:#334155,font-size:12px
     class START start
     class TH,CH,PH head
     class CART,T1,T2,C1,C4,P1,P3 step
@@ -48,3 +91,4 @@ flowchart TD
     class TR,CR,PR good
     class TL,CL1,CL2,PL bad
     class CE,PE person
+    class L1,L2,L3,L4,L5,L6,L7,L8,L9,L10,L11,L12,L13,L14,L15,L16 tag
