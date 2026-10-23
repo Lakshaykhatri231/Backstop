@@ -136,6 +136,7 @@ def init_schema() -> None:
         c.execute(text("ALTER TABLE mandates ADD COLUMN IF NOT EXISTS customer_id UUID"))
         c.execute(text("ALTER TABLE mandates ADD COLUMN IF NOT EXISTS service_key VARCHAR"))
         c.execute(text("ALTER TABLE mandates ADD COLUMN IF NOT EXISTS service_name VARCHAR"))
+        c.execute(text("ALTER TABLE voice_calls ADD COLUMN IF NOT EXISTS profile_json TEXT"))
     vectorstore.init(engine)
 
 

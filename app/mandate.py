@@ -49,7 +49,7 @@ from app.revenue import adjust as adjust_revenue
 from app.rules_engine import CARD_TOKEN_DEBIT_LEAD, MANDATE_MIN_RETRY_GAP, rule_based_mandate_plan
 from app.database import get_db
 from app.scheduler import cancel_for_subject, register_handler, schedule
-from app import contacts, messaging, notify, promises
+from app import contacts, customer_profile, messaging, notify, promises
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -197,6 +197,16 @@ def process_mandate_event(db: Session, event: Event) -> Decision:
         # consent + window), so consent given in between still counts.
         cp = contacts.for_razorpay_customer(db, event.customer_id)
         call_at = retry_at - timedelta(hours=18)
+        # At the time of day this customer likes to be called (a remembered fact, consent needed), if that still leaves the call well
+        # before the retry. Anything else keeps the default.
+        slot = customer_profile.contact_slot(db, cp)
+        if slot:
+            moved = customer_profile.shift_to_slot(call_at, slot, earliest=now + timedelta(hours=1),
+                                                   latest=retry_at - timedelta(hours=3))
+            if moved != call_at:
+                write_audit_entry(db, "voice_call_time_personalised", {
+                    "subject_type": SUBJECT, "subject_id": run.id, "slot": slot, "why": "retry_call"})
+            call_at = moved
         if cp is not None and cp.phone and call_at > now + timedelta(hours=1):
             schedule(db, ScheduledKind.VOICE_CALL, SUBJECT, run.id, call_at,
                      payload={"subscription_id": sub_id}, customer_ref=cp.id,

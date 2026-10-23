@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from app import memory as memory_mod, memory_retrieval, persona, speech, voice_chat
 from app import clock, contacts, demo_text, mandate, messaging, receivables, revenue, runtime_flags, voice
-from app import autopay, demo_personas, payment_links, razorpay_client as rz
+from app import autopay, customer_profile, demo_personas, payment_links, razorpay_client as rz
 from app import promises as promises_mod
 from app.audit import write_audit_entry
 from app.config import settings
@@ -1063,6 +1063,7 @@ def call_reply(call_id: str, req: CallReplyIn, db: Session = Depends(get_db)):
 @router.get("/memory")
 def memory_view(subject_type: str, subject_id: str, db: Session = Depends(get_db)):
     """What the assistant would remember about this debt's customer."""
+    approach = None
     if subject_type == "mandate":        # an authorised autopay owes nothing yet: no debt records, but the person's memory is theirs
         m = db.query(Mandate).filter(Mandate.id == subject_id).first()
         if m is None:
@@ -1074,7 +1075,10 @@ def memory_view(subject_type: str, subject_id: str, db: Session = Depends(get_db
         if target is None:
             raise HTTPException(404, "Unknown subject")
         cp, records = target.contact, memory_mod.structured_context(db, None, target)
+        approach = customer_profile.build(db, target)
     return {
+        "approach": ({"name": approach.approach, "why": approach.why, "pay_day": approach.pay_day, "call_slot": approach.call_slot,
+                      "facts_used": approach.consented} if subject_type != "mandate" else None),
         "contact_id": cp.id if cp else None,
         "memory_consent": bool(cp and cp.memory_consent),
         "records": records,
@@ -1245,8 +1249,9 @@ def speech_tts(call_id: str, turn: int | None = None, db: Session = Depends(get_
         text, kind = row.text, row.kind
     t0 = time.perf_counter()
     try:
-        style, degree = persona.style_for(text, kind)
-        audio, hit = speech.synthesize_cached(text, c.language, style, degree)
+        approach = voice_chat.call_approach(db, c)
+        style, degree = persona.style_for(text, kind, approach)
+        audio, hit = speech.synthesize_cached(text, c.language, style, degree, approach)
     except speech.SpeechError as e:
         raise HTTPException(e.status, e.message)
     if turn:

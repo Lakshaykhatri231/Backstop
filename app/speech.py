@@ -83,7 +83,10 @@ def config() -> dict:
 
 
 def is_hd(voice: str) -> bool:
-    """Dragon HD voices: expressive by themselves; they ignore SSML pace/pitch/breaks and styles."""
+    """Dragon HD voices: expressive by themselves (they read the MEANING of the text). Measured on this account's en-IN-Meera HD voice
+    (2026-10-23, scripts/hd_voice_probe.py): pace (`prosody rate`) and `break` ARE honoured; pitch and speaking styles (`express-as`,
+    inline [tags]) are NOT. Microsoft's own table lists `prosody` as unsupported for DragonHD, so the pace behaviour is undocumented and
+    could change: `AZURE_HD_DELIVERY=false` turns it off. A plain-text voice with styles (en-US-Ava HD) was measured to honour them."""
     return "dragonhd" in (voice or "").lower()
 
 
@@ -104,7 +107,12 @@ def _voice_for(language: str) -> tuple[str, str]:
 #   - a breath (~300 ms) between sentences, a shorter one inside a long sentence.
 # Everything is derived from the text alone, so the same line always sounds the same and the
 # cache stays valid. Bump PROSODY_VERSION when this changes (it is part of the cache key).
-PROSODY_VERSION = "v2"
+PROSODY_VERSION = "v4"
+
+# Per-customer delivery on the STANDARD voices (an HD voice ignores SSML; there the wording and punctuation carry it, see
+# persona.py): (rate change in points, pitch change in points, breath length multiplier). A gentle approach is slower, a touch
+# lower and takes longer breaths; a brief one is a little quicker and breathes less.
+APPROACH_DELIVERY = {"gentle": (-6, -1, 1.3), "brief": (4, 0, 0.8), "steady": (-2, 0, 1.0)}
 
 _FILLER = re.compile(
     r"^\s*(Hmm|Acha|Achha|Ji|Haan ji|Theek hai|Bilkul|Oh|Arre|Okay|Sure|Right|Of course|I see|"
@@ -115,8 +123,12 @@ _BREATH_SENTENCE_MS, _BREATH_FILLER_MS, _BREATH_CLAUSE_MS, _BREATH_BEFORE_QUESTI
 _LONG_SENTENCE = 110
 
 
-def _prosody(rate: str, pitch: str, inner: str) -> str:
-    return f"<prosody rate='{rate}' pitch='{pitch}'>{inner}</prosody>"
+def _shift(pct: str, delta: int) -> str:
+    return f"{int(pct.rstrip('%')) + delta:+d}%"
+
+
+def _prosody(rate: str, pitch: str, inner: str, delivery: tuple[int, int, float] = (0, 0, 1.0)) -> str:
+    return f"<prosody rate='{_shift(rate, delivery[0])}' pitch='{_shift(pitch, delivery[1])}'>{inner}</prosody>"
 
 
 def _slow_numbers(escaped: str) -> str:
@@ -137,21 +149,46 @@ def _split_long(sentence: str) -> list[str]:
     return [sentence[: cut + 1].strip(), sentence[cut + 1 :].strip()]
 
 
-def delivery_ssml(text: str) -> str:
+# Dragon HD voices: the ONLY per-customer delivery they obey is pace and pauses (see is_hd). (rate change in points, extra breath between
+# sentences in ms). Standard approach = untouched plain text, because the plain HD voice is the one that was judged most natural; only
+# customers whose approach asks for a different manner get any change.
+HD_DELIVERY = {"gentle": (-3, 100), "brief": (6, 0)}
+
+
+def hd_delivery_ssml(text: str, approach: str | None = None) -> str:
+    """The inside of a <voice> for a Dragon HD voice: plain text, or - for an approach with a manner of its own - the same text with
+    a slower / quicker pace and a little extra breath after each sentence. No pitch or style (the voice ignores both)."""
+    text = (text or "").strip()
+    d = HD_DELIVERY.get(approach or "")
+    if d is None or not settings.azure_hd_delivery:
+        return escape(text)
+    rate, pause = d
+    sentences = [x for x in _SENTENCE_END.split(text) if x.strip()]
+    parts = []
+    for i, sent in enumerate(sentences):
+        if i > 0 and pause:
+            parts.append(f"<break time='{pause}ms'/>")
+        parts.append(f"<prosody rate='{rate:+d}%'>{escape(sent)}</prosody>")
+    return "".join(parts) or escape(text)
+
+
+def delivery_ssml(text: str, approach: str | None = None) -> str:
     """The inside of a <voice>: the text split into pieces with their own pace, pitch and breaths."""
     text = (text or "").strip()
+    d = APPROACH_DELIVERY.get(approach or "", (0, 0, 1.0))
+    ms = lambda n: int(n * d[2])
     parts: list[str] = []
     m = _FILLER.match(text)
     if m:
-        parts.append(_prosody("-8%", "-2%", escape(m.group(1) + m.group(2))))
-        parts.append(f"<break time='{_BREATH_FILLER_MS}ms'/>")
+        parts.append(_prosody("-8%", "-2%", escape(m.group(1) + m.group(2)), d))
+        parts.append(f"<break time='{ms(_BREATH_FILLER_MS)}ms'/>")
         text = text[m.end():]
     sentences = [x for x in _SENTENCE_END.split(text) if x.strip()]
     for i, sent in enumerate(sentences):
         is_q = sent.rstrip().endswith(("?", "？"))
         is_last = i == len(sentences) - 1
         if i > 0:
-            parts.append(f"<break time='{_BREATH_BEFORE_QUESTION_MS if is_q and is_last else _BREATH_SENTENCE_MS}ms'/>")
+            parts.append(f"<break time='{ms(_BREATH_BEFORE_QUESTION_MS if is_q and is_last else _BREATH_SENTENCE_MS)}ms'/>")
         if is_q and is_last:
             rate, pitch = "-6%", "+3%"          # a question that invites an answer: unhurried, rising a little
         elif i == 0:
@@ -161,8 +198,8 @@ def delivery_ssml(text: str) -> str:
         chunks = _split_long(sent)
         for j, chunk in enumerate(chunks):
             if j > 0:
-                parts.append(f"<break time='{_BREATH_CLAUSE_MS}ms'/>")
-            parts.append(_prosody(rate, pitch, _slow_numbers(escape(chunk))))
+                parts.append(f"<break time='{ms(_BREATH_CLAUSE_MS)}ms'/>")
+            parts.append(_prosody(rate, pitch, _slow_numbers(escape(chunk)), d))
     return "".join(parts) or escape(text)
 
 
@@ -175,17 +212,18 @@ _mem_lock = threading.Lock()
 _MEM_MAX = 200
 
 
-def _cache_key(voice: str, style: str | None, degree: float | None, text: str) -> str:
-    return hashlib.sha256(f"{PROSODY_VERSION}|{voice}|{style or ''}|{degree or ''}|{text}".encode("utf-8")).hexdigest()
+def _cache_key(voice: str, style: str | None, degree: float | None, text: str, approach: str | None = None) -> str:
+    return hashlib.sha256(
+        f"{PROSODY_VERSION}|{voice}|{style or ''}|{degree or ''}|{approach or ''}|{text}".encode("utf-8")).hexdigest()
 
 
 def synthesize_cached(text: str, language: str, style: str | None = None,
-                      degree: float | None = None) -> tuple[bytes, bool]:
+                      degree: float | None = None, approach: str | None = None) -> tuple[bytes, bool]:
     """(mp3 bytes, cache_hit). The same line in the same voice is only ever paid
     for once - it saves the free Azure allowance and the round trip (replays,
     "one moment" clips, the fixed answers every customer hears)."""
     voice, _ = _voice_for(language)
-    key = _cache_key(voice, style, degree, (text or "").strip())
+    key = _cache_key(voice, style, degree, (text or "").strip(), approach)
     with _mem_lock:
         hit = _mem.get(key)
         if hit is not None:
@@ -203,14 +241,14 @@ def synthesize_cached(text: str, language: str, style: str | None = None,
     except OSError:
         pass
     try:
-        data = synthesize(text, language, style, degree)
+        data = synthesize(text, language, style, degree, approach=approach)
     except SpeechError as e:
         if not (is_hd(voice) and e.code in ("tts_quota", "tts_failed", "tts_auth")):
             raise
         # The HD voice was refused (not in the free allowance / over quota): speak with the standard
         # voice instead so the call never goes silent. Not cached, so the HD voice is retried next time.
         logger.warning("HD voice unavailable (%s); using %s", e.code, settings.azure_voice_fallback)
-        return synthesize(text, language, style, degree, voice_override=settings.azure_voice_fallback), False
+        return synthesize(text, language, style, degree, voice_override=settings.azure_voice_fallback, approach=approach), False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
@@ -224,7 +262,7 @@ def synthesize_cached(text: str, language: str, style: str | None = None,
 
 
 def synthesize(text: str, language: str, style: str | None = None, degree: float | None = None,
-               voice_override: str | None = None) -> bytes:
+               voice_override: str | None = None, approach: str | None = None) -> bytes:
     """Text -> MP3 bytes via Azure AI Speech."""
     if tts_provider() != "azure":
         raise SpeechError("tts_not_configured", "Cloud voice is not configured; the browser voice is used.", 503)
@@ -238,11 +276,11 @@ def synthesize(text: str, language: str, style: str | None = None, degree: float
     if voice_override:
         voice, xml_lang = voice_override, "-".join(voice_override.split("-")[:2])
     if is_hd(voice):
-        # An HD voice reads the text the way a person would, driven by wording and punctuation, so
-        # it gets the text as is (no SSML pace / pitch / breath tuning, no style).
-        body = escape(text[:MAX_TTS_CHARS])
+        # An HD voice reads the text the way a person would, driven by wording and punctuation. It gets plain text, except that a
+        # gentle / brief approach adds pace and pauses (the only things it obeys). No pitch, no style: measured to do nothing here.
+        body = hd_delivery_ssml(text[:MAX_TTS_CHARS], approach)
     else:
-        body = delivery_ssml(text[:MAX_TTS_CHARS])
+        body = delivery_ssml(text[:MAX_TTS_CHARS], approach)
     if style and voice in _STYLE_VOICES:
         deg = f" styledegree='{degree}'" if degree else ""
         body = f"<mstts:express-as style='{style}'{deg}>{body}</mstts:express-as>"

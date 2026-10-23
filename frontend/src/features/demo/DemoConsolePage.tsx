@@ -51,6 +51,14 @@ const POLL = 2500;
 const SELECTED_KEY = "demo-console.selected";
 
 
+const APPROACH_LABEL: Record<string, string> = {
+  standard: "Standard: friendly and clear",
+  gentle: "Gentle: slower, softer words, no hurry on the date",
+  brief: "Brief: short and warm (kept their last promise)",
+  steady: "Steady: calm, asks for one firm date",
+  explain_first: "Explains the charge first",
+};
+
 function errText(e: unknown): string {
   if (e instanceof ApiError) {
     const d = (e.body as { detail?: unknown } | null)?.detail;
@@ -693,6 +701,24 @@ function ConsoleBody() {
                   <Card title="Customer's phone" right={<span className="text-xs text-ink/40">{mine.length} message(s)</span>}>
                     <PhoneInbox messages={mine} />
                   </Card>
+
+                  {memQ.data?.approach && (
+                    <Card title="How the agent will approach this customer">
+                      <p className="text-sm text-ink">
+                        <span className="font-semibold">{APPROACH_LABEL[memQ.data.approach.name]}</span>
+                        {memQ.data.approach.pay_day ? ` · usual pay day: the ${memQ.data.approach.pay_day}th` : ""}
+                        {memQ.data.approach.call_slot ? ` · likes ${memQ.data.approach.call_slot} calls` : ""}
+                      </p>
+                      <ul className="mt-2 space-y-1 text-xs text-ink/60 list-disc pl-4">
+                        {memQ.data.approach.why.map((w) => <li key={w}>{w}</li>)}
+                      </ul>
+                      <p className="mt-2 text-xs text-ink/45">
+                        {memQ.data.approach.facts_used
+                          ? "Worked out from our records and what the customer let us remember. None of it is read out, apart from offering their usual pay day as a date to confirm."
+                          : "Worked out from our own records only: the customer has not agreed to memory, so nothing they told us is used."}
+                      </p>
+                    </Card>
+                  )}
 
                   <Card title={`What the agent remembers about ${persona?.name ?? "this customer"}`}>
                     <div className="flex flex-wrap items-center gap-3">

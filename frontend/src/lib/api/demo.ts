@@ -296,7 +296,12 @@ export const fillerUrl = (lang: string, n: number) =>
   `/demo/speech/filler?lang=${encodeURIComponent(lang)}&n=${n}`;
 
 export type MemoryTiers = { notes: number; episodes: number; chunks: number; facts: number; links: number };
+export type DemoApproach = {
+  name: "standard" | "gentle" | "brief" | "steady" | "explain_first"; why: string[];
+  pay_day: number | null; call_slot: string | null; facts_used: boolean;
+};
 export type DemoMemory = {
+  approach?: DemoApproach | null;
   contact_id: string | null; memory_consent: boolean; records: string[];
   notes: { id: string; kind: string; text: string; created_at: string; expires_at: string }[];
   retention_days: number;

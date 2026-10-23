@@ -741,6 +741,7 @@ class VoiceCall(Base):
     extracted_promise_date = Column(Date, nullable=True)
     routed_to = Column(String, nullable=True)
     duration_s = Column(Integer, nullable=True)
+    profile_json = Column(Text, nullable=True)                    # app/customer_profile.py: how the agent approaches this customer
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

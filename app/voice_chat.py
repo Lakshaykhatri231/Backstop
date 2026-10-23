@@ -37,7 +37,7 @@ from datetime import date
 import httpx
 from sqlalchemy.orm import Session
 
-from app import clock, contacts, memory, memory_retrieval, persona, retrieval, runtime_flags, short_replies, voice
+from app import clock, contacts, customer_profile, memory, memory_retrieval, persona, retrieval, runtime_flags, short_replies, voice
 from app.audit import write_audit_entry
 from app.config import settings
 from app.messaging import MERCHANT_NAME
@@ -389,11 +389,40 @@ def _recent_leads(turns) -> set[str]:
     return {persona.lead(t.text) for t in agent}
 
 
+def effective_approach(base: str, turns) -> str:
+    """The approach for THIS moment. Someone who was upset earlier in this call stays handled gently for the rest of it, even
+    after they calm down: a person does not snap back to brisk the moment a customer stops sounding worried."""
+    if any(t.speaker == "agent" and t.kind in ("hardship", "apology") for t in turns):
+        return "gentle"
+    return base
+
+
+def call_approach(db: Session, call) -> str | None:
+    """The approach in force on this call right now (for how a line is voiced). None when the call has no profile."""
+    p = customer_profile.CustomerProfile.from_json(getattr(call, "profile_json", None))
+    return effective_approach(p.approach, _turns(db, call.id)) if p is not None else None
+
+
+def _last_call_fillers(db: Session, call) -> set[str]:
+    """Fillers the agent used on this customer's previous call, so a returning customer does not hear the same ones in the same
+    places (people vary how they greet and acknowledge from one conversation to the next)."""
+    if not call.customer_ref:
+        return set()
+    prev = (db.query(VoiceCall).filter(VoiceCall.customer_ref == call.customer_ref, VoiceCall.id != call.id,
+                                       VoiceCall.status != "in_progress").order_by(VoiceCall.created_at.desc()).first())
+    if prev is None:
+        return set()
+    rows = _turns(db, prev.id)
+    return {persona.lead(t.text) for t in rows if t.speaker == "agent" and persona.starts_with_filler(t.text)}
+
+
 def with_filler(body: str, language: str, turn_no: int, customer_text: str = "", repeat: bool = False,
-                avoid: set[str] | None = None) -> str:
-    """At most ONE human touch per reply: a kind line if the customer mentioned
-    hardship, otherwise a short acknowledgement - rotated by turn number and never
-    one of the last two used."""
+                avoid: set[str] | None = None, approach: str | None = None,
+                agent_lines: list[str] | None = None) -> str:
+    """At most ONE human touch per reply: a kind line if the customer mentioned hardship, otherwise a short acknowledgement -
+    rotated by turn number and never one of the last two used. With an `approach` (a call that has a customer profile) fillers are
+    also RATIONED the way a person's are: not on every line, never twice in a row, none after a one-word answer, and a gentle
+    approach uses softer openers more often."""
     if repeat:
         return body
     lang = language if language in persona.LANGS else "hinglish"
@@ -401,7 +430,12 @@ def with_filler(body: str, language: str, turn_no: int, customer_text: str = "",
         return f"{persona.apply_gender(persona.pick(persona.EMPATHY[lang], turn_no, avoid))} {body}"
     if persona.starts_with_filler(body):
         return body
-    return f"{persona.pick(persona.ACK[lang], turn_no, avoid)} {_soften(body)}"
+    last = (agent_lines or [""])[-1]
+    same_opening = bool(last) and persona.lead(body) == persona.lead(last) and not persona.starts_with_filler(last)
+    if approach is not None and not same_opening and not persona.wants_touch(approach, agent_lines or [], customer_text):
+        return body                      # (two lines in a row opening with the same word is the one thing a filler is for)
+    pool = persona.GENTLE_ACK[lang] if approach == "gentle" else persona.ACK[lang]
+    return f"{persona.apply_gender(persona.pick(pool, turn_no, avoid))} {_soften(body)}"
 
 
 # ── Checking a model-written reply before it is spoken ───────────────────────
@@ -571,7 +605,7 @@ def _approved_facts(target, language: str) -> dict:
 
 
 def _llm_turn(call, target, turns, transcript: str, today: date, knowledge=(), notes_hits=(), context=(),
-              memory_lines=()) -> dict:
+              memory_lines=(), approach: str | None = None) -> dict:
     if runtime_flags.is_llm_failure_forced():
         raise RuntimeError("LLM failure forced via /debug/toggle-llm-failure")
     if not settings.groq_api_key:
@@ -580,7 +614,7 @@ def _llm_turn(call, target, turns, transcript: str, today: date, knowledge=(), n
              "reference": target.ref, "situation": target.script_kind, "today": today.isoformat()}
     history = "\n".join(f"{'Assistant' if t.speaker == 'agent' else 'Customer'}: {t.text}" for t in turns[-10:])
     system = (
-        persona.system_prompt(call.language) + "\n"
+        persona.system_prompt(call.language, approach) + "\n"
         "TASK: classify what the customer's LAST line meant; if it is a question (Q_*) or unclear, write the "
         "spoken reply.\n"
         "INTENTS: PAY_NOW (asks for / agrees to the link, or pays now), PROMISE (will pay, with or without a date), "
@@ -661,13 +695,13 @@ def _llm_turn(call, target, turns, transcript: str, today: date, knowledge=(), n
 
 
 def understand_turn(db: Session, call, target, turns, text: str, today: date, knowledge=(), notes_hits=(),
-                    context=(), memory_ctx=None) -> dict:
+                    context=(), memory_ctx=None, approach: str | None = None) -> dict:
     """{intent, source, reply?, tone, source_ids?}. `reply` is present only when the model wrote one
     AND it passed validate_reply; otherwise the caller uses the fixed template (or the verbatim
     approved passage for a policy question)."""
     try:
         out = _llm_turn(call, target, turns, text, today, knowledge, notes_hits, context,
-                        memory_ctx.prompt_lines() if memory_ctx is not None else ())
+                        memory_ctx.prompt_lines() if memory_ctx is not None else (), approach)
     except Exception as e:
         write_audit_entry(db, "llm_failure_fallback", {"error": str(e)[:200], "stage": "voice_turn"})
         k = voice.keyword_classify(text, today)
@@ -854,11 +888,14 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
     if interrupted and last_agent is not None:      # the customer talked over that line
         last_agent.interrupted = True
         db.commit()
-    avoid = _recent_leads(turns)
+    profile = customer_profile.for_call(db, call, target)
+    approach = effective_approach(profile.approach, turns)
+    agent_lines = [t.text for t in turns if t.speaker == "agent"]
+    avoid = _recent_leads(turns) | _last_call_fillers(db, call)
     mem_trace: dict | None = None        # what the tiered memory read this turn (ids only), kept on the agent turn
 
     def timings(**extra) -> dict:
-        out = {"server_ms": int((time.perf_counter() - t_start) * 1000), **extra}
+        out = {"server_ms": int((time.perf_counter() - t_start) * 1000), "approach": approach, **extra}
         if mem_trace:
             out["memory"] = mem_trace
         if stt_ms is not None:
@@ -905,7 +942,7 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
     retrieve_ms = int((time.perf_counter() - t_ret) * 1000)
     context = memory.structured_context(db, call.id, target)
     t_llm = time.perf_counter()
-    c = short if short is not None else understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx)
+    c = short if short is not None else understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx, approach)
     llm_ms = int((time.perf_counter() - t_llm) * 1000)
     if c["intent"] == "Q_POLICY" and not c.get("reply") and settings.rag_enabled and c.get("search_query"):
         # A Roman-Hinglish question rarely lands on English documents; search again with the
@@ -921,7 +958,7 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
         if kn2 and [h.id for h in kn2] != [h.id for h in kn]:
             kn = kn2
             t_llm2 = time.perf_counter()
-            c = understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx)
+            c = understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx, approach)
             llm_ms += int((time.perf_counter() - t_llm2) * 1000)
     if c["intent"] == "Q_MEMORY" and full_memory and not c.get("reply") and not mctx.recalled and settings.rag_enabled:
         # The model heard a question about an earlier call that the profile alone could not answer (and our word-cue
@@ -935,7 +972,7 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
         retrieve_ms += int((time.perf_counter() - t_ret3) * 1000)
         if mctx.recalled:
             t_llm3 = time.perf_counter()
-            c = understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx)
+            c = understand_turn(db, call, target, turns, text, today, kn, mem, context, mctx, approach)
             llm_ms += int((time.perf_counter() - t_llm3) * 1000)
     intent = c["intent"]
     tone = c.get("tone") or "calm"
@@ -958,7 +995,8 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
         # A bare "nahi" is not yet a decision to refuse: a speech slip or a "no" to something else is common, and ending the
         # call on it would be abrupt. Ask once for a date or a person (the same line as hardship, so it never repeats); a
         # second "no" goes through the normal refusal.
-        body = with_filler(_say(call.language, "hardship"), call.language, len(turns) + 1, text, avoid=avoid)
+        body = with_filler(_say(call.language, "hardship"), call.language, len(turns) + 1, text, avoid=avoid,
+                           approach=approach, agent_lines=agent_lines)
         a = _add(db, call.id, "agent", body, kind="hardship", timings=timings(llm_ms=llm_ms, retrieve_ms=retrieve_ms))
         write_audit_entry(db, "voice_call_soft_decline_checked", {"call_id": call.id, "turn": a.turn_no})
         return {"ok": True, "done": False, "agent": _view(a), "understood": "SOFT_NO"}
@@ -999,7 +1037,7 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
             call.transcript = _conversation(db, call.id)
             db.commit()
             return {**out, "done": True, "agent": _view(a)}
-        reply = with_filler(body, call.language, next_no, text, avoid=avoid)
+        reply = with_filler(body, call.language, next_no, text, avoid=avoid, approach=approach, agent_lines=agent_lines)
         sources = [{"title": h.title, "heading": h.extra.get("heading"), "score": round(h.score, 2)} for h in used]
         a = _add(db, call.id, "agent", reply, kind=kind, sources=sources,
                  timings=timings(llm_ms=llm_ms, retrieve_ms=retrieve_ms))
@@ -1027,7 +1065,8 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
         else:                                              # nothing remembered: say so, never invent
             body = f"{L['no_memory']} {persona.reask(target.script_kind, call.language, next_no, last_text)}"
             kind, used = "answer_memory_none", []
-        reply = with_filler(persona.apply_gender(body), call.language, next_no, text, avoid=avoid)
+        reply = with_filler(persona.apply_gender(body), call.language, next_no, text, avoid=avoid, approach=approach,
+                            agent_lines=agent_lines)
         sources = [{"title": f"Call on {r['when']}", "heading": r["kind"], "score": r["score"]} for r in used]
         sources += [{"title": "Profile note", "heading": "core", "score": 1.0} for _ in cited_core]
         a = _add(db, call.id, "agent", reply, kind=kind, sources=sources or None,
@@ -1054,7 +1093,8 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
             body = answer_text(intent, target, call.language, call.script_text, next_no, last_text)
             kind = "answer"
         reply = (body if kind == "hold"
-                 else with_filler(body, call.language, next_no, text, repeat=(intent == "Q_REPEAT" and kind != "reask"), avoid=avoid))
+                 else with_filler(body, call.language, next_no, text, repeat=(intent == "Q_REPEAT" and kind != "reask"), avoid=avoid,
+                                  approach=approach, agent_lines=agent_lines))
         a = _add(db, call.id, "agent", reply, kind=kind, timings=timings(llm_ms=llm_ms, retrieve_ms=retrieve_ms))
         write_audit_entry(db, "voice_call_question_answered", {
             "call_id": call.id, "question": intent, "turn": a.turn_no, "intent_source": c["source"],
@@ -1100,8 +1140,26 @@ def converse_turn(db: Session, call_id: str, transcript: str, now=None, stt_ms: 
         pdate = said
     asks = sum(1 for t in turns if t.speaker == "agent" and t.kind in ("ask_date", "ask_date_again"))
     if intent == "PROMISE" and pdate is None and asks < 2:
+        # They are willing but gave no date. If they once told us when money usually arrives, offer THAT date (they confirm it; it
+        # is judged by the same promise rules as any other) instead of asking again. Offered once: a "no" must not loop.
+        usual = None
+        if asks == 0 and profile.pay_day and not any(t.kind == "confirm_date" for t in turns):
+            max_days = (runtime_flags.get_promise_max_days_b2b() if target.subject_type == "invoice"
+                        else runtime_flags.get_promise_max_days_b2c())
+            usual = customer_profile.suggested_date(profile.pay_day, today, max_days)
+        if usual is not None:
+            ask = persona.apply_gender(persona.USUAL_DATE[persona._lang(call.language)]).format(
+                day=profile.pay_day, date=usual.strftime("%d %b"))
+            a = _add(db, call.id, "agent", ask, intent=f"CONFIRM:{usual.isoformat()}", kind="confirm_date",
+                     timings=timings(llm_ms=llm_ms, retrieve_ms=retrieve_ms))
+            write_audit_entry(db, "voice_call_usual_date_offered", {
+                "call_id": call.id, "turn": a.turn_no, "date": usual.isoformat(), "source": "remembered_pay_day"})
+            return {"ok": True, "done": False, "agent": _view(a), "understood": "CONFIRM_DATE"}
         key = "ask_date" if asks == 0 else "ask_date_again"
-        a = _add(db, call.id, "agent", _say(call.language, key), kind=key,
+        line = _say(call.language, key)
+        if key == "ask_date":
+            line = persona.ask_date_line(approach, call.language, line, profile.partial_before)
+        a = _add(db, call.id, "agent", line, kind=key,
                  timings=timings(llm_ms=llm_ms, retrieve_ms=retrieve_ms))
         write_audit_entry(db, "voice_call_date_asked", {"call_id": call.id, "turn": a.turn_no, "ask_no": asks + 1})
         return {"ok": True, "done": False, "agent": _view(a), "understood": "ASK_DATE"}

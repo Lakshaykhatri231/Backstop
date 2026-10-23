@@ -15,7 +15,7 @@ audit log. Customers are contacted only within consent, calling-hours and freque
 | **Frontend** | React 19 · TanStack Router/Query · Vite · Tailwind 4 · shadcn/radix (≈20k lines TypeScript) |
 | **AI** | Groq (function-calling) for bounded decisions and policy analysis · local embeddings + pgvector/numpy hybrid retrieval · Azure neural TTS · Whisper STT |
 | **Payments** | Razorpay Test Mode: Orders, Standard Checkout, Payment Links, card mandates (recurring API), HMAC-verified webhooks |
-| **Quality** | 38 unit tests · 13 offline eval suites (~890 cases) · 1 live-model suite · 20 mutation self-tests proving the suites fail when the app is broken |
+| **Quality** | 44 unit tests · 14 offline eval suites (~970 cases) · 1 live-model suite · 26 mutation self-tests proving the suites fail when the app is broken |
 
 > **Status.** Everything runs end to end against Razorpay **Test Mode**. SMS, OTP, the DND registry and the telephone line are *simulated*
 > (the browser is the phone). See [What is real and what is simulated](#what-is-real-and-what-is-simulated) — this document is explicit
@@ -393,16 +393,20 @@ flowchart TD
     LLM["⑤ ONE model call per turn<br/>intent · promise date · draft reply · sources"]
     CHK["⑥ Reply checker<br/>real numbers · no fees or threats<br/>right language · grounded"]
     FIX["Fixed, pre-written line<br/>or approved policy text"]
-    TTS["⑦ Text to speech<br/>SSML pauses · empathetic style"]
+    TTS["⑦ Text to speech<br/>Dragon HD voice<br/>gentle: 3% slower + short pauses · brief: 6% quicker"]
     PLAY["🔊 Browser plays the reply"]
     TURNS[("⑧ voice_turns<br/>transcript + timings<br/>→ summarised into memory after the call")]
+    PROF[("Customer profile · built at call start<br/>approach · usual pay day · call time<br/>from our records + consented facts")]
 
     W(["Groq Whisper large-v3<br/>language fixed per call"])
     KB[("Knowledge store<br/>merchant policy · EN / Hinglish / Hindi")]
     MEM[("Customer memory<br/>facts · past calls · verbatim chunks<br/>written after each call · consent only")]
     G(["Groq gpt-oss-120b<br/>forced tool call"])
-    AZ(["Azure Neural TTS<br/>Neerja / Swara"])
+    AZ(["Azure Neural TTS<br/>Dragon HD Meera<br/>Neerja as fallback"])
 
+    PROF -- "every turn, short replies too" --> SR
+    PROF -- "approach line in the prompt" --> LLM
+    PROF -- "pace, pauses, fillers" --> TTS
     MIC -- "audio clip" --> STT
     STT <--> W
     STT -- "text" --> SR
@@ -424,11 +428,11 @@ flowchart TD
     classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
     classDef guard fill:#fef3c7,stroke:#d97706,color:#78350f
     class W,G,AZ ext
-    class KB,MEM,TURNS store
+    class KB,MEM,TURNS,PROF store
     class CHK,FIX guard
 ```
 
-🟣 external AI service · 🔵 PostgreSQL (pgvector) store · 🟠 safety path. The numbers match the steps below; after ⑦ the next turn starts again at ①.
+🟣 external AI service · 🔵 PostgreSQL (pgvector) store · 🟠 safety path. The numbers show the order of the main path (the profile is read at every step); after ⑦ the next turn starts again at ①.
 
 **How one turn flows**
 
@@ -436,23 +440,37 @@ flowchart TD
    The server drops clips that are too short or silent, and known phantom phrases.
 2. **Transcribe.** The server sends the clip to Groq Whisper `large-v3`. The language is fixed to the contact's saved one, and the merchant name,
    invoice number and amount are passed as hints. Whisper returns Hindi in Devanagari, which is mapped to Roman keywords.
-3. **Short replies skip the model.** A whole line like "haan", "nahi" or "ek minute" is read from fixed word lists. These cover Hinglish,
+3. **Personalise.** At call start code builds a small profile for this customer from our own records (promises kept or broken, earlier
+   calls) and, with the customer's memory consent, what they told us (usual pay day, preferred call time, a money difficulty). It picks
+   an **approach** that every later turn reads, including short replies and the fallback when the model is down:
+   - **gentle** (had a hard time or sounded worried): slower, softer words, no hurry on the date, empathetic voice style, and it stays
+     gentle for the rest of the call even after they calm down;
+   - **brief** (kept their last promise): short and warm, a fixed thank-you after the AI disclosure;
+   - **steady** (missed a date): calm and clear, asks for one firm date and offers a person;
+   - **explain first** (questioned a charge before): says what it is for before asking anything;
+   - **standard** otherwise.
+
+   It also changes what the agent *does*: a bare "haan" with no date becomes "you mentioned money usually arrives around the 5th, shall I
+   note the 5th?" (always confirmed, and inside the promise limit), and the call is placed at the time of day they like. Hardship and
+   other private details only change tone; they are never read out. To sound less scripted, fillers ("acha,") are rationed (a gentle
+   customer gets more than a brisk one, never two in a row, none after a one-word answer) and a returning customer doesn't hear the same
+   ones as last time.
+4. **Short replies skip the model.** A whole line like "haan", "nahi" or "ek minute" is read from fixed word lists. These cover Hinglish,
    English and Devanagari, plus stretched spellings like "haaan".
-4. **Retrieve (RAG).** Embeddings come from a local multilingual MiniLM model (384 dimensions). Search runs in PostgreSQL, using a pgvector
+5. **Retrieve (RAG).** Embeddings come from a local multilingual MiniLM model (384 dimensions). Search runs in PostgreSQL, using a pgvector
    HNSW index when the extension is installed and numpy otherwise. Vector and full-text results are merged with reciprocal-rank fusion.
    - **Knowledge store:** the merchant's approved policy passages. They are used only when the match is confident.
    - **Memory store:** a "core card" of the customer's facts and their last call, always included. Past-call windows are added when the customer
      says something like "pichli baar". Matches are ranked by relevance × recency × importance.
 
    The two stores are kept separate so one customer's notes can never appear in another customer's answer.
-5. **Decide.** One forced tool call to Groq `gpt-oss-120b` per turn returns the intent, any promise date, a draft reply and the sources it cited.
+6. **Decide.** One forced tool call to Groq `gpt-oss-120b` per turn returns the intent, any promise date, a draft reply and the sources it cited.
    If the call fails or hits a rate limit, keyword rules take over and the fallback is audited.
-6. **Check.** Code validates the draft before it is spoken. It allows only the debt's real numbers and nothing outside the cited passages. It
+7. **Check.** Code validates the draft before it is spoken. It allows only the debt's real numbers and nothing outside the cited passages. It
    rejects fees, threats, links or a claim to be human, and the reply must be in the call's language. A rejected draft becomes a fixed template
    or the approved policy text, read in the call's language.
-7. **Speak.** Azure Neural TTS voices the reply, with short SSML pauses and an empathetic style on kind lines. Audio is cached on disk. Without
-   an Azure key, the browser's own voice is used.
-8. **Remember.** Every turn is stored in `voice_turns`. After the call a background thread first saves the episode and the conversation word for
+8. **Speak.** Azure Neural TTS voices the reply. The default Dragon HD voice reads the wording and punctuation like a person; a gentle approach also slows it by 3% and adds a 100 ms breath after each sentence, and a brief one is 6% quicker (the only delivery controls it obeys, see [Voice delivery](#voice-delivery-what-is-applied-today-and-what-a-richer-voice-could-add)). On the standard voices there is also pitch and an empathetic style. Audio is cached on disk. Without an Azure key, the browser's own voice is used.
+9. **Remember.** Every turn is stored in `voice_turns`. After the call a background thread first saves the episode and the conversation word for
    word, with no model. Then one model call writes a summary and allow-listed facts. Memory is written only with the customer's consent, and it
    expires and can be deleted.
 
@@ -492,6 +510,43 @@ another's answer. Every row carries a `merchant_id`.
 
 **Speech (`speech.py`).** TTS = Azure AI Speech (neural voice, optional), STT = Groq Whisper; both fall back to the browser's own. Keys stay in
 `.env`, travel in headers, and no endpoint returns them. The telephone line itself is not built — the browser is the phone.
+
+---
+
+### Voice delivery: what is applied today, and what a richer voice could add
+
+The system works out more about each customer than the current voice can express. This is the honest split. The default voice is Azure
+**Dragon HD** (`en-IN-Meera`), chosen because it sounded the most human of those compared by ear (against the standard Neerja voice).
+
+**What this voice obeys.** Measured on the audio itself (`scripts/hd_voice_probe.py`, 2026-10-23), not taken from documentation:
+
+| Control | Result on en-IN-Meera HD | Used |
+|---|---|---|
+| Pace (`prosody rate`) | Honoured: -40% made a clip 55% longer, +40% 35% shorter | Yes: gentle -3%, brief +6% |
+| Pauses (`break`) | Honoured: a 2 s break added about 1.9 s | Yes: +100 ms after each sentence for gentle |
+| Pitch | Ignored: median pitch unchanged at +40% and -40% | No |
+| Speaking styles (`express-as`, inline `[sympathetic]`) | Ignored: a whisper and a shout changed neither loudness nor pitch | No |
+
+Microsoft's own table lists `prosody` as unsupported for DragonHD, so the pace behaviour is undocumented and could change; it can be
+switched off with `AZURE_HD_DELIVERY=false`. The same style test on `en-US-Ava` (also Dragon HD) changed the audio strongly (a whisper
+about half as loud, a shout higher), so style control is a property of the individual voice, not of Dragon HD as a whole.
+
+**What we extract, what is applied today, and what a richer voice could do:**
+
+| Extracted from history and the call | Applied today (any voice) | Extra with a voice that supports styles and pitch |
+|---|---|---|
+| Approach: gentle, brief, steady, explain-first | Wording, the model's prompt, the first "by when?" line; pace and pauses (gentle, brief) | A sympathetic or reassuring style for gentle, calm for steady, confident for brief |
+| The customer's mood during the call (calm, frustrated, distressed) | Fixed kind lines, an apology, staying gentle for the rest of the call | The voice itself softening to match, not just the words |
+| Mood at the end of their last call | The approach choice | A matching opening tone |
+| A successful close (promise booked) | A fixed closing line | A lighter, warmer lift |
+| Amounts and dates | Spoken plainly | Emphasis or slower digits (pace could do this on Dragon HD; not added, to leave the plain voice untouched) |
+| A question to the customer | Punctuation | A rising pitch and a longer pause before it |
+| Fillers ("acha,") | Rationed and varied in the words | A quicker, lower delivery, and breath or sigh sounds |
+
+**What was checked and what was not.** The style test on Meera and Ava and the pace, pause and pitch measurements are real. Dragon HD
+Omni, which Microsoft documents with style control and a speed setting, was not adopted: its Meera version does not exist (the service
+answered HTTP 400), and no other Omni voice was tried. Ava's Hindi pronunciation was not judged by ear. To use a style-capable voice, set the
+`AZURE_VOICE_*` settings and add the voice to `speech._STYLE_VOICES`; the style choices per approach already exist in `persona.style_for`.
 
 ---
 
@@ -614,7 +669,7 @@ vendor calls. The backend runs **exactly as it would live**; only the console ad
 
 ```bash
 python -m pytest tests -q                 # 38 pure-logic unit tests
-python -m evals.run                       # 13 offline suites (~890 cases), ~20 s, against a throwaway `rr_eval` database
+python -m evals.run                       # 14 offline suites (~970 cases), ~20 s, against a throwaway `rr_eval` database
 python -m evals.run --live                # also the suite that calls the real model (Groq free tier: ~3 turns a minute)
 python -m evals.selftest                  # 20 deliberate breakages the suites MUST catch
 ```
@@ -687,7 +742,7 @@ absolute quality); audio quality, speech-recognition accuracy and latency under 
 5. **Open <http://localhost:8000/login>**, choose **Merchant**, and sign in with the email and password from step 3. You land on the dashboard.
    It will be empty on a fresh database — load sample data (next section) to see every screen working.
 
-Optional but recommended once it runs: `python scripts/seed_demo_all.py` (sample data), `python -m evals.run` (13 test suites), `python -m pytest tests`.
+Optional but recommended once it runs: `python scripts/seed_demo_all.py` (sample data), `python -m evals.run` (14 test suites), `python -m pytest tests`.
 
 > The frontend build is not optional: FastAPI serves `frontend/dist`. Re-run `npm run build` after any frontend change; `uvicorn --reload` doesn't. Tables are created on startup.
 
@@ -882,7 +937,7 @@ app/                         FastAPI backend (~23k lines)
 frontend/                    React SPA: dashboard, storefront, portals, console, walkthroughs (~20k lines)
 scripts/                     seeders, reset, webhook simulator, Razorpay probe, live checks
 sql/                         idempotent column / enum migrations
-evals/  tests/               13 offline eval suites + live suite + mutation self-test · unit tests
+evals/  tests/               14 offline eval suites + live suite + mutation self-test · unit tests
 data/                        store_policy.md (the agent's approved knowledge) · sample_policy.md
 ```
 

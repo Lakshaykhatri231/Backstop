@@ -17,7 +17,7 @@ def _patch(obj, name, value):
 
 
 def mutations():
-    from app import contacts, demo_personas, memory, memory_retrieval, memory_write, runtime_flags, voice, voice_chat as vc
+    from app import contacts, demo_personas, memory, memory_retrieval, memory_write, persona, runtime_flags, voice, voice_chat as vc
     from app.config import settings
     oldyes = vc.is_yes
 
@@ -145,6 +145,29 @@ def mutations():
         promises_mod._keep_link_alive = lambda *a, **k: None
         return lambda: setattr(promises_mod, "_keep_link_alive", old)
 
+    def history_ignored():
+        from app import customer_profile as cpf
+        return _patch(cpf, "for_call", lambda db, call, target: cpf.CustomerProfile())
+
+    def facts_without_consent():
+        return _patch(contacts, "has_full_memory_consent", lambda cp: cp is not None)
+
+    def date_offered_past_the_limit():
+        from app import customer_profile as cpf
+        orig = cpf.suggested_date
+        return _patch(cpf, "suggested_date", lambda pay_day, today, max_days: orig(pay_day, today, 10_000))
+
+    def filler_on_every_line():
+        return _patch(persona, "wants_touch", lambda *a, **k: True)
+
+    def call_time_ignores_the_customer():
+        from app import customer_profile as cpf
+        return _patch(cpf, "shift_to_slot", lambda when, slot, earliest, latest: when)
+
+    def hd_voice_ignores_the_approach():
+        from app import speech
+        return _patch(speech, "hd_delivery_ssml", lambda text, approach=None: speech.escape(text))
+
     return [
         ("a checker that allows every reply", "guardrails", checker_allows_all),
         ("the yes-reader forgets Devanagari", "understanding", lambda: _patch(vc, "is_yes", old_is_yes)),
@@ -166,6 +189,12 @@ def mutations():
         ("short replies (haan / nahh / hmm) not read", "flow", short_replies_ignored),
         ("a pattern is drawn from 3 cases a side", "collections_analysis", tiny_groups_become_patterns),
         ("stand-in payment links count as conversions", "collections_analysis", stand_in_links_counted),
+        ("the customer's history is ignored on a call", "personalisation", history_ignored),
+        ("remembered facts are used without consent", "personalisation", facts_without_consent),
+        ("a suggested date past the promise limit", "personalisation", date_offered_past_the_limit),
+        ("a filler on every line", "personalisation", filler_on_every_line),
+        ("the call time ignores when the customer likes calls", "personalisation", call_time_ignores_the_customer),
+        ("the Dragon HD voice ignores the customer's approach", "personalisation", hd_voice_ignores_the_approach),
     ]
 
 

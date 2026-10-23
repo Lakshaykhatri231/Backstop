@@ -99,8 +99,9 @@ APOLOGY = {
 }
 
 _FILLER_START = re.compile(
-    r"^\s*(hmm|acha|achha|ji|oh|arre|okay|ok|sure|right|of course|i see|haan|bilkul|theek|"
-    r"हम्म|अच्छा|जी|ओह|अरे|ठीक|हाँ|बिल्कुल)\b", re.IGNORECASE)
+    r"^\s*(hmm|acha|achha|ji|oh|arre|okay|ok|sure|right|of course|i see|haan|bilkul|theek|koi baat nahi|"
+    r"that is alright|i understand|"
+    r"हम्म|अच्छा|जी|ओह|अरे|ठीक|हाँ|बिल्कुल|कोई बात नहीं)(?![\wऀ-ॿ])", re.IGNORECASE)
 
 
 def starts_with_filler(text: str) -> bool:
@@ -133,11 +134,88 @@ def reask(situation: str, language: str, index: int, last_agent_text: str = "") 
     return options[index % len(options)]
 
 
-def style_for(text: str, kind: str | None) -> tuple[str | None, float | None]:
+# ── Per-customer manner (see app/customer_profile.py) ───────────────────────
+# A real person does not talk to everyone the same way: slower and softer with someone who is struggling, brisk with someone reliable,
+# calm and clear with someone who missed a date. The approach is chosen by CODE from the customer's history; these are the fixed
+# pieces it changes. Fillers are also rationed (a person does not start every sentence with "acha"): how often depends on the approach.
+
+APPROACH_PROMPT = {
+    "gentle": "THIS CUSTOMER has had a hard time. Go slower, use softer wording and shorter sentences, reassure before you ask, "
+              "and show there is no hurry about the date. Never mention their difficulty unless they raise it.",
+    "brief": "THIS CUSTOMER is reliable and kept their last promise. Be brief, warm and direct; one short sentence is enough; "
+             "do not over-explain.",
+    "steady": "THIS CUSTOMER missed an earlier date. Stay calm, respectful and clear. Never mention the missed date or sound "
+              "doubtful. Ask for one firm date and offer a person if they cannot give one.",
+    "explain_first": "THIS CUSTOMER has questioned this charge before. In one plain sentence say what it is for BEFORE you ask "
+                     "anything, and keep it simple.",
+}
+
+# How many agent lines pass between two fillers, per approach (the first line of a call is the script).
+FILLER_PERIOD = {"gentle": 2, "standard": 3, "steady": 3, "explain_first": 3, "brief": 4}
+
+GENTLE_ACK = {
+    "hinglish": ["Koi baat nahi,", "Ji, bilkul,", "Haan ji, samajh sakti hoon,", "Theek hai, aaram se,"],
+    "hi": ["कोई बात नहीं,", "जी, बिल्कुल,", "हाँ जी, मैं समझ सकती हूँ,", "ठीक है, आराम से,"],
+    "en": ["That is alright,", "Sure, take your time,", "I understand,", "Of course,"],
+}
+
+# The first "by when?" line, in the customer's manner. The default (standard) text lives in voice_chat._ANSWERS["ask_date"].
+ASK_DATE = {
+    "gentle": {
+        "hinglish": "Koi jaldi nahi hai. Jo date aapke liye theek ho, bas wahi bata dijiye.",
+        "hi": "कोई जल्दी नहीं है। जो तारीख़ आपके लिए ठीक हो, बस वही बता दीजिए।",
+        "en": "There is no hurry. Just tell me a date that works for you.",
+    },
+    "brief": {
+        "hinglish": "Theek hai. Kab tak?",
+        "hi": "ठीक है। कब तक?",
+        "en": "Alright. By when?",
+    },
+    "steady": {
+        "hinglish": "Theek hai. Ek pakki tareekh bata dijiye, main wahi note kar leti hoon.",
+        "hi": "ठीक है। एक पक्की तारीख़ बता दीजिए, मैं वही नोट कर लेती हूँ।",
+        "en": "Alright. Could you give me one firm date? I will note exactly that.",
+    },
+}
+PART_PAYMENT_HINT = {
+    "hinglish": "Chahein to abhi thoda hissa bhi de sakte hain.",
+    "hi": "चाहें तो अभी थोड़ा हिस्सा भी दे सकते हैं।",
+    "en": "You can also pay part of it now if you like.",
+}
+# Offered when the customer said yes but gave no date and we know their usual pay day. {day} comes from what they told us.
+USUAL_DATE = {
+    "hinglish": "Theek hai. Aapne bataya tha ki paise {day} tareekh ke aas-paas aate hain, to kya main {date} note kar loon?",
+    "hi": "ठीक है। आपने बताया था कि पैसे {day} तारीख़ के आस-पास आते हैं, तो क्या मैं {date} नोट कर लूँ?",
+    "en": "Alright. You mentioned money usually comes around day {day} of the month, so shall I note {date}?",
+}
+
+
+def ask_date_line(approach: str | None, language: str, standard: str, partial_before: bool = False) -> str:
+    """The first "by when?" line in the customer's manner (`standard` is the default text), plus a nudge towards a part-payment for
+    someone who has paid in parts before."""
+    block = ASK_DATE.get(approach or "")
+    line = apply_gender(block[_lang(language)]) if block else standard
+    return f"{line} {PART_PAYMENT_HINT[_lang(language)]}" if partial_before else line
+
+
+def wants_touch(approach: str | None, agent_lines: list[str], customer_text: str) -> bool:
+    """Should this reply carry a spoken filler ("acha,")? Rationed by approach, never twice in a row, and a one- or two-word customer
+    answer gets a short reply back (people mirror each other's length) - except with a gentle approach, which always softens."""
+    n = len(agent_lines)
+    if agent_lines and starts_with_filler(agent_lines[-1]):
+        return False
+    if approach != "gentle" and len((customer_text or "").split()) <= 2:
+        return False
+    return n % FILLER_PERIOD.get(approach or "standard", 3) == 0
+
+
+def style_for(text: str, kind: str | None, approach: str | None = None) -> tuple[str | None, float | None]:
     """(Azure speaking style, intensity) for a stored agent line. Only some voices have styles.
     Kind lines are warmer; a successful close gets a light, friendly lift; the rest stay neutral."""
     if kind in ("hardship", "apology"):
         return "empathetic", 1.2
+    if approach == "gentle":
+        return "empathetic", 0.8
     t = (text or "").lstrip()
     for lang in LANGS:
         if any(t.startswith(e) for e in EMPATHY[lang]):
@@ -206,7 +284,7 @@ EXAMPLES = {
 }
 
 
-def system_prompt(language: str) -> str:
+def system_prompt(language: str, approach: str | None = None) -> str:
     lang = _lang(language)
     g = (settings.persona_gender or "female").lower()
     gender_rule = (
@@ -216,5 +294,6 @@ def system_prompt(language: str) -> str:
     )
     return (
         "You are an AI assistant on a payment-recovery phone call. " + STYLE_GUIDE + " " + gender_rule +
-        " Speak in " + REGISTER[lang] + ".\nTONE EXAMPLES (style only, do not copy facts):\n" + EXAMPLES[lang]
+        " Speak in " + REGISTER[lang] + "." + (("\n" + APPROACH_PROMPT[approach]) if approach in APPROACH_PROMPT else "")
+        + "\nTONE EXAMPLES (style only, do not copy facts):\n" + EXAMPLES[lang]
     )

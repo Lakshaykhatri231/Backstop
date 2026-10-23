@@ -213,13 +213,14 @@ class Settings(BaseSettings):
     tts_cache_dir: str = "var/tts_cache"
     azure_speech_key: str = ""
     azure_speech_region: str = ""      # e.g. centralindia
-    # Dragon HD voices are the most natural (their pitch and rhythm follow the MEANING of the text,
-    # so they take plain punctuated text, not SSML tuning). Not in Azure's documented free allowance:
+    # Dragon HD voices are the most natural (their pitch and rhythm follow the MEANING of the text, so they take plain punctuated
+    # text; of the SSML tuning only pace and pauses are obeyed, never pitch or styles). Not in Azure's documented free allowance:
     # if one is refused or over quota the call falls back to azure_voice_fallback (a standard voice).
     azure_voice_hi: str = "en-IN-Meera:DragonHDLatestNeural"          # multilingual: also reads Devanagari
     azure_voice_en: str = "en-IN-Meera:DragonHDLatestNeural"
     azure_voice_hinglish: str = "en-IN-Meera:DragonHDLatestNeural"
     azure_voice_fallback: str = "en-IN-NeerjaNeural"
+    azure_hd_delivery: bool = True     # per-customer pace and pauses on a Dragon HD voice (undocumented by Microsoft, measured to work; see speech.is_hd)
     groq_stt_model: str = "whisper-large-v3"
     stt_language_mode: str = "fixed"   # fixed = tell Whisper the call's language; auto = let it detect (see scripts/eval_stt.py)
     otp_ttl_seconds: int = 300

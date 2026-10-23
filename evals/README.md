@@ -28,6 +28,7 @@ non-critical cases are listed in the report anyway.
 | privacy | Zero cross-customer leakage; forget / consent withdrawal / phone change delete every tier; expiry sweep |
 | flow | The real call loop with a scripted model: promises, disputes, hardship, grounded policy/memory answers, language, guards, outage fallback, turn budget |
 | personas | Each Demo Console test customer is in the state it claims; Reset restores it |
+| personalisation | History changes how the agent approaches a customer (approach, usual pay day, call time), only with consent and never by speaking private details; fillers rationed and varied |
 | razorpay_money | Payment links and card mandates against a fake Razorpay: exactly-once money, a promise extends a link in place, a debit never fires on a settled run |
 | accounts_console | Role gates, tenant isolation, consent rules, autopays as console items, no real spend from the run-to-the-end buttons |
 | collections_analysis | Every Collections metric on known data; no pattern from tiny groups; the seed data gives every setting enough evidence |

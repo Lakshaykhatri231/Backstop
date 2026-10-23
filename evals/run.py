@@ -28,6 +28,7 @@ SUITES = [  # (name, module, needs_live)
     ("privacy", "evals.suites.privacy", False),
     ("flow", "evals.suites.flow", False),
     ("personas", "evals.suites.personas", False),
+    ("personalisation", "evals.suites.personalisation", False),
     ("razorpay_money", "evals.suites.razorpay_money", False),
     ("accounts_console", "evals.suites.accounts_console", False),
     ("collections_analysis", "evals.suites.collections_analysis", False),

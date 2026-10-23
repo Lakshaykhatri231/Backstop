@@ -49,7 +49,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import clock, contacts, dnd, promises, receivables, runtime_flags
+from app import clock, contacts, customer_profile, dnd, promises, receivables, runtime_flags
 from app.actions import execute_action
 from app.audit import write_audit_entry
 from app.config import settings
@@ -564,13 +564,16 @@ def place_call(db: Session, subject_type: str, subject_id: str,
         return False, f"voice_blocked:{block}"
 
     cp = target.contact
-    script = build_script(target.script_kind, cp.preferred_language or contacts.DEFAULT_LANGUAGE, target.name,
-                          target.amount_inr, due=target.due, ref=target.ref)
-    result = _provider.place_call(cp.phone, script, cp.preferred_language or contacts.DEFAULT_LANGUAGE)
+    lang = cp.preferred_language or contacts.DEFAULT_LANGUAGE
+    profile = customer_profile.build(db, target)
+    script = customer_profile.add_to_opening(
+        build_script(target.script_kind, lang, target.name, target.amount_inr, due=target.due, ref=target.ref),
+        customer_profile.opening_extra(profile, lang))
+    result = _provider.place_call(cp.phone, script, lang)
     call = VoiceCall(
         subject_type=subject_type, subject_id=subject_id, customer_ref=cp.id, phone=cp.phone,
-        language=cp.preferred_language or contacts.DEFAULT_LANGUAGE, script_text=script, status=result.status,
-        transcript=result.transcript, duration_s=result.duration_s,
+        language=lang, script_text=script, status=result.status,
+        transcript=result.transcript, duration_s=result.duration_s, profile_json=profile.to_json(),
     )
     db.add(call)
     db.commit()
@@ -602,17 +605,22 @@ def start_interactive_call(db: Session, subject_type: str, subject_id: str,
         return {"ok": False, "block": block}
     cp = target.contact
     lang = cp.preferred_language or contacts.DEFAULT_LANGUAGE
-    script = build_script(target.script_kind, lang, target.name, target.amount_inr,
-                          due=target.due, ref=target.ref)
+    profile = customer_profile.build(db, target)
+    script = customer_profile.add_to_opening(
+        build_script(target.script_kind, lang, target.name, target.amount_inr, due=target.due, ref=target.ref),
+        customer_profile.opening_extra(profile, lang))
     call = VoiceCall(subject_type=subject_type, subject_id=subject_id, customer_ref=cp.id,
                      phone=cp.phone, language=lang, script_text=script, status="in_progress",
-                     transcript="")
+                     transcript="", profile_json=profile.to_json())
     db.add(call)
     db.commit()
     db.refresh(call)
     write_audit_entry(db, "voice_call_placed", {
         "call_id": call.id, "subject_type": subject_type, "subject_id": subject_id,
         "language": lang, "status": "in_progress", "interactive": True})
+    write_audit_entry(db, "voice_profile_built", {
+        "call_id": call.id, "approach": profile.approach, "facts_used": bool(profile.consented and (profile.pay_day or profile.call_slot)),
+        "kept": profile.kept, "broken": profile.broken})
     return {"ok": True, "call_id": call.id, "script": script, "language": lang,
             "phone_masked": contacts.mask_phone(cp.phone)}
 
@@ -677,10 +685,18 @@ def _stop_voice(db: Session, cp: ContactPoint) -> None:
         "contact_id": cp.id, "phone": contacts.mask_phone(cp.phone)})
 
 
-def _callback(db: Session, target: CallTarget, now: datetime) -> str:
+def _callback(db: Session, target: CallTarget, now: datetime, said: str = "") -> str:
+    """"Call me later": tomorrow, at the time of day they asked for in so many words ("shaam ko"), else the time we remember they like,
+    else 10:00. Always inside the calling window; the scheduler re-checks consent and the window when it fires."""
+    base = _next_window_day_10am(now)
+    slot = customer_profile.slot_from_text(said) or customer_profile.contact_slot(db, target.contact)
+    when = customer_profile.shift_to_slot(base, slot, earliest=now + timedelta(hours=1), latest=base + timedelta(hours=12))
     schedule(db, ScheduledKind.VOICE_CALL, target.subject_type, target.subject_id,
-             _next_window_day_10am(now), payload={"ref": target.ref},
+             when, payload={"ref": target.ref},
              customer_ref=target.contact.id if target.contact else None)
+    if when != base:
+        write_audit_entry(db, "voice_call_time_personalised", {
+            "subject_type": target.subject_type, "subject_id": target.subject_id, "slot": slot, "why": "callback"})
     return "callback_scheduled"
 
 
@@ -768,7 +784,7 @@ def _route(db: Session, call: VoiceCall, target: CallTarget, now: datetime,
         routed = "voice_stopped_wrong_number"
 
     elif intent == "CALLBACK":
-        routed = _callback(db, target, now)
+        routed = _callback(db, target, now, call.transcript or "")
 
     else:   # REFUSED / UNCLEAR - a person should look at it
         execute_action(AgentAction.ESCALATE_TO_HUMAN.value, None)
