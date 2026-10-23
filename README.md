@@ -169,8 +169,8 @@ LLM layer and no gate — its action is already bounded by the deterministic tie
 What a shopper goes through after adding items to a cart, and how each of the three ways it can go ends. This is a compact version of the diagram on the
 **Architecture** page of the website (`/architecture`), which has the full detail.
 
-<p align="center"><a href="docs/diagrams/customer-journey.png"><img src="docs/diagrams/customer-journey.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="480"></a></p>
-<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/customer-journey.mmd</code></sub></p>
+<p align="center"><a href="docs/diagrams/customer-journey-v2.png"><img src="docs/diagrams/customer-journey-v2.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="480"></a></p>
+<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/customer-journey-v2.mmd</code></sub></p>
 
 🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. A retry goes back to "order created, payment attempted" and repeats until the order is paid, runs out of attempts, or the
 customer gives up. "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its
@@ -182,8 +182,8 @@ The same story from the system's side (compact; the website page shows every bra
 pipeline (rules, then the AI, then a confidence gate, then the action). A cart event is shorter: no Razorpay order exists yet, so it is
 rules only, with no AI and no gate.
 
-<p align="center"><a href="docs/diagrams/decision-pipeline.png"><img src="docs/diagrams/decision-pipeline.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="420"></a></p>
-<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/decision-pipeline.mmd</code></sub></p>
+<p align="center"><a href="docs/diagrams/decision-pipeline-v2.png"><img src="docs/diagrams/decision-pipeline-v2.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="420"></a></p>
+<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/decision-pipeline-v2.mmd</code></sub></p>
 
 Teal boxes are the cart-event path (rules only); purple is the AI step; orange is a forced hand-off to a person; blue is the audit log.
 
