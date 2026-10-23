@@ -385,53 +385,46 @@ resumes "one step firmer", measured from the invoice's age on the ladder.
 One generic `place_call(subject_type, id)` with adapters for invoices, failed autopay debits and failed storefront orders.
 
 ```mermaid
-flowchart LR
-    subgraph A["1 · Before the call"]
-      direction TB
-      REC["Our records<br/>promises kept or missed"]
-      MEM[("Customer memory<br/>past calls · facts<br/>only if they agreed")]
-      PROF["Customer profile<br/>how to talk to this person"]
-      REC --> PROF
-      MEM --> PROF
-    end
+flowchart TD
+    MIC["🎙️ Mic<br/>the browser listens"] --> CLIP["Short audio clip"]
+    CLIP --> STT["Speech to text<br/>(Whisper)"]
+    STT --> SR{"Short reply?<br/>haan · nahi · ruko"}
 
-    subgraph B["2 · Every turn of the call (repeats until it ends)"]
-      direction TB
-      L["Listen<br/>mic → Whisper → text"]
-      U["Understand<br/>short replies by rules,<br/>else one AI call"]
-      KB[("Store policy<br/>approved answers")]
-      C["Check the reply<br/>numbers · wording · language"]
-      S["Speak<br/>Azure Dragon HD voice"]
-      L --> U
-      KB --> U
-      U --> C --> S
-    end
+    SR -- yes --> FIX["Fixed pre-written reply"]
+    SR -- no --> RAG["RAG: finds useful facts<br/>• merchant policy<br/>• customer memory"]
 
-    subgraph D["3 · After the call"]
-      direction TB
-      R["Call saved<br/>transcript + outcome"]
-      SUM["Summary and facts<br/>saved to memory<br/>for the next call"]
-      R --> SUM
-    end
+    RAG --> LLM["LLM (Groq)<br/>conversation + retrieved facts"]
+    LLM --> DRAFT["Draft reply"]
+    DRAFT --> CHK{"Draft checker<br/>numbers · wording · language"}
 
-    A ==>|"tone · usual date · pace"| B
-    B ==>|"call ends"| D
+    CHK -- fail --> FIX
+    CHK -- pass --> REPLY["Reply"]
 
-    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    FIX --> TTS["Text to speech<br/>(Azure neural voice)"]
+    REPLY --> TTS
+    TTS --> SENT["🔊 Sent to the customer"]
+    SENT --> VT[("Voice turns<br/>every line is saved; the call is summarised<br/>and saved in the customer's memory")]
+
+    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
+    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef fixed fill:#ffedd5,stroke:#ea580c,color:#7c2d12
     classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
-    classDef guard fill:#fef3c7,stroke:#d97706,color:#78350f
-    class MEM,KB store
-    class L,U,S ai
-    class C guard
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+    class MIC,CLIP,DRAFT step
+    class SR,CHK ask
+    class FIX fixed
+    class STT,RAG,LLM,TTS ai
+    class REPLY,SENT good
+    class VT store
 ```
 
-🟣 uses an outside AI service (Whisper, Groq, Azure) · 🔵 stored data (PostgreSQL) · 🟠 safety check
+🟣 uses an outside AI service (Whisper, Groq, Azure) · 🟠 a decision or a safe fixed line · 🔵 saved data
 
-**Reading it left to right:**
-1. **Before the call**, the system reads what we know about this customer (our own records, plus their memory if they agreed) and boils it down to a short profile: how to talk to them.
-2. **During the call**, every turn is the same four steps: listen, understand, check the reply, speak. The profile shapes the tone, the date it suggests and the pace; the store policy supplies approved answers; the customer's memory is searched if they ask about an earlier call.
-3. **After the call**, the conversation is saved and a summary goes into memory, so the next call starts better informed.
-
+This is what happens on **every turn** of a call, and it repeats until the call ends. A short answer like "haan" never reaches the AI: it gets
+a fixed reply straight away. Anything longer is answered from the merchant's policy and the customer's memory, and the AI's draft is only spoken
+if the checker passes it; otherwise a fixed pre-written line is spoken instead. Before the call starts, the system also builds a short profile
+of the customer (from our own records and, if they agreed, their memory) that shapes the tone, the date it suggests and the pace of the voice.
 The numbered list below goes through each step in detail.
 
 **How one turn flows**
