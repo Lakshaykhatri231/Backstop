@@ -94,14 +94,12 @@ and never reports "recovered".
 ### The customer's journey in the store
 
 <p align="center"><img src="docs/diagrams/customer-journey.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="760"></p>
-<p align="center"><sub>Editable source: <code>docs/diagrams/customer-journey.drawio</code> (open in <a href="https://app.diagrams.net">draw.io</a>)</sub></p>
 
 "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its `risk_settled` flag changes.
 
 ### The decision pipeline
 
 <p align="center"><img src="docs/diagrams/decision-pipeline.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="640"></p>
-<p align="center"><sub>Editable source: <code>docs/diagrams/decision-pipeline.drawio</code></sub></p>
 
 ---
 
@@ -181,7 +179,6 @@ All time-based actions are durable `ScheduledAction` rows claimed with an atomic
 **08:00–19:00 IST**; a job due outside the window is deferred, not dropped.
 
 <p align="center"><img src="docs/diagrams/autopay-invoice-promise.png" alt="Autopay and invoice recovery with promises to pay" width="720"></p>
-<p align="center"><sub>Editable source: <code>docs/diagrams/autopay-invoice-promise.drawio</code></sub></p>
 
 - **Card autopay** (`autopay.py`, `mandate.py`): Razorpay holds the token and moves the money; our scheduler decides when. A debit order with a
   notification is created ≥ 37 h ahead, then a debit job re-checks and charges. A failed debit opens a `MandateRun`; every retry is ≥ 25 h out with a
@@ -201,7 +198,6 @@ All time-based actions are durable `ScheduledAction` rows claimed with an atomic
 One generic `place_call(subject_type, id)` with adapters for invoices, failed autopay debits and failed storefront orders.
 
 <p align="center"><img src="docs/diagrams/voice-agent-turn.png" alt="One turn of a voice call: listen, transcribe, short-reply shortcut, retrieve, decide, check, speak, remember" width="440"></p>
-<p align="center"><sub>Editable source: <code>docs/diagrams/voice-agent-turn.drawio</code></sub></p>
 
 1. **Listen.** Browser-side Silero VAD cuts speech into clips; barge-in stops the agent's audio.
 2. **Transcribe.** Groq Whisper `large-v3`, language fixed to the contact's saved one, with merchant/invoice/amount hints.
