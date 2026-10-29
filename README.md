@@ -890,28 +890,6 @@ full list; the essentials:
 
 ---
 
-## Limitations and roadmap
-
-**Known limitations**
-- Test Mode only. A business is capped at about 30 Payment Links; whether cancelling one frees a slot is unconfirmed.
-- One merchant account; no multi-tenant isolation beyond the per-merchant `merchant_id` on the knowledge/memory stores.
-- UPI AutoPay can't be tested in Test Mode (cards only).
-- `runtime_flags` overrides (applied recommendations) live in memory and don't survive a restart.
-- `audit.verify_chain` checks hash *linkage*; it doesn't yet recompute each entry's own content hash, so in-place tampering inside a single row
-  wouldn't be caught (chain-of-custody is enforced, per-entry content integrity isn't).
-- No migration framework (idempotent SQL files instead).
-- The demo clock is shared: moving it for one debt runs other debts' due jobs.
-- Groq's free tier (8,000 tokens/min) limits live calls to roughly three turns a minute.
-- `voice_turns` transcripts are kept without a retention sweep.
-
-**Roadmap**
-- Real telephony + a real SMS carrier; DLT templates; a real DND lookup.
-- Alembic migrations; persisted settings; multi-merchant tenancy.
-- Content-hash verification in the audit chain.
-- Measure healthy-debit success and judge an applied setting change before/after.
-- Drafting the Hinglish/Hindi policy wording automatically at upload (merchant approves).
-
----
 
 ## Repository layout
 
@@ -938,8 +916,7 @@ evals/  tests/               14 offline eval suites + live suite + mutation self
 data/                        store_policy.md (the agent's approved knowledge) · sample_policy.md
 ```
 
-Design rationale for each module lives in its own docstring and inline comments — worth reading before changing the logic they guard.
-`CLAUDE.md` is a denser engineering reference to the same invariants.
+
 
 ---
 
