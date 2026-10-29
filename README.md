@@ -42,8 +42,7 @@ audit log. Customers are contacted only within consent, calling-hours and freque
 15. [Operations](#operations)
 16. [Security, privacy and compliance posture](#security-privacy-and-compliance-posture)
 17. [What is real and what is simulated](#what-is-real-and-what-is-simulated)
-18. [Limitations and roadmap](#limitations-and-roadmap)
-19. [Repository layout](#repository-layout)
+18. [Repository layout](#repository-layout)
 
 ---
 
@@ -67,30 +66,6 @@ audit log. Customers are contacted only within consent, calling-hours and freque
 ---
 
 ## Architecture
-
-```mermaid
-flowchart LR
-    subgraph Signals
-      W[Razorpay webhooks<br/>HMAC-verified]
-      P[Drop-off poller]
-      C[Storefront cart events]
-      S[Scheduler<br/>durable jobs]
-    end
-    W & P & C --> R[Rules engine<br/>deterministic decision]
-    R --> L[LLM refine<br/>bounded: confidence + wording only]
-    L --> G{Confidence gate}
-    G -- below bar / high value / risk --> H[Escalate to human]
-    G -- ok --> X[Execute action<br/>stub layer, never claims recovered]
-    S --> M[Mandate / promises /<br/>receivables / voice]
-    M --> X
-    X --> A[(Audit log<br/>append-only, hash-chained)]
-    R --> A
-    L --> A
-    X --> V[(Revenue ledger<br/>single adjust function, exactly-once)]
-    V --> A
-    A --> I[Policy analytics<br/>4 analyses + apply]
-    I -. changes settings via runtime flags .-> R
-```
 
 **Request lifecycle (payment failure).** `POST /webhooks/razorpay` verifies the HMAC signature, dedupes on the `X-Razorpay-Event-Id`
 header, writes an `Event` and returns `accepted` immediately. A FastAPI background task then runs the decision with its own DB session:
@@ -166,33 +141,24 @@ LLM layer and no gate — its action is already bounded by the deterministic tie
 
 ### The customer's journey in the store
 
-What a shopper goes through after adding items to a cart, and how each of the three ways it can go ends. This is a compact version of the diagram on the
-**Architecture** page of the website (`/architecture`), which has the full detail.
+What a shopper goes through after adding items to a cart, and how each of the three ways it can go ends. The website's `/architecture` page has the full detail.
 
-<p align="center"><a href="docs/diagrams/customer-journey-v2.png"><img src="docs/diagrams/customer-journey-v2.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="480"></a></p>
-<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/customer-journey-v2.mmd</code></sub></p>
+<p align="center"><img src="docs/diagrams/customer-journey.png" alt="Customer journey in the store: timeout, cancelled and payment-initiated branches" width="760"></p>
+<p align="center"><sub>Editable source: <code>docs/diagrams/customer-journey.drawio</code> (open in <a href="https://app.diagrams.net">draw.io</a>)</sub></p>
 
-🟧 a decision · 🟩 recovered · 🟥 lost · 🟠 handed to a person. A retry goes back to "order created, payment attempted" and repeats until the order is paid, runs out of attempts, or the
-customer gives up. "Give up" is its own ending on the failed-payment thread, not a cart cancel: the order stays failed and only its
-`risk_settled` flag changes.
+A retry loops back to "order created, payment attempted" until the order is paid, runs out of attempts, or the customer gives up. "Give up" is its own
+ending on the failed-payment thread, not a cart cancel: the order stays failed and only its `risk_settled` flag changes.
 
 ### The decision pipeline
 
-The same story from the system's side (compact; the website page shows every branch of the AI's confirm / adjust step): what happens when a revenue leak is detected. Payment failures and checkout drop-offs share one
-pipeline (rules, then the AI, then a confidence gate, then the action). A cart event is shorter: no Razorpay order exists yet, so it is
-rules only, with no AI and no gate.
+What happens when a revenue leak is detected. Payment failures and checkout drop-offs share one pipeline (rules, then the AI, then a confidence
+gate, then the action). A cart event is shorter: no Razorpay order exists yet, so it is rules only, with no AI and no gate.
 
-<p align="center"><a href="docs/diagrams/decision-pipeline-v2.png"><img src="docs/diagrams/decision-pipeline-v2.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="420"></a></p>
-<p align="center"><sub>Click the image to zoom. Editable source: <code>docs/diagrams/decision-pipeline-v2.mmd</code></sub></p>
+<p align="center"><img src="docs/diagrams/decision-pipeline.png" alt="Decision pipeline: payment failures and drop-offs share one pipeline, cart events are rules only" width="640"></p>
+<p align="center"><sub>Editable source: <code>docs/diagrams/decision-pipeline.drawio</code></sub></p>
 
-Teal boxes are the cart-event path (rules only); purple is the AI step; orange is a forced hand-off to a person; blue is the audit log.
-
-- **The AI only refines.** It can confirm the rules' pick or adjust its confidence and reasoning; the action is locked to a fixed list.
-- **If the AI is down**, the rules' answer is used and the failure is logged.
-- **Escalation is executed too.** Falling below the confidence threshold swaps the action to `escalate_to_human` first, then both branches run the
-  same `execute_action()` and write the same audit entries.
-- **"Recovered" is counted only when Razorpay confirms the payment**, and each rupee is counted once, either as recovered or as lost.
-- **Every step is written to the audit log.**
+- **Escalation is executed too:** falling below the threshold swaps the action to `escalate_to_human`, then both branches run the same `execute_action()`.
+- **"Recovered" is counted only when Razorpay confirms the payment**, and each rupee is counted once, as recovered or as lost.
 
 ---
 
@@ -301,7 +267,7 @@ money (a past bug did exactly that).
 Every state change goes through `write_audit_entry()` into an append-only, hash-chained table (118 action types): `entry_hash = sha256(prev_hash |
 sequence_num | action_type | details | timestamp)`, chaining from a genesis of 64 zeros. `revenue_state_updated` fires on every ledger change, so
 money and log reconcile. `GET /audit/verify` walks the chain and proves nothing was deleted, reordered or spliced in. It does **not** recompute
-each entry's own hash, so editing one row in place would go undetected (see [Limitations](#limitations-and-roadmap)).
+each entry's own hash, so editing one row in place would go undetected .
 
 ---
 
@@ -311,28 +277,8 @@ These three features run on the **durable scheduler** (`scheduler.py`): every ti
 `UPDATE … WHERE status='scheduled'` (exactly once). Customer-facing job kinds run only **08:00–19:00 IST** — a job due outside the window is
 deferred, not dropped. A kind with no registered handler is skipped and audited.
 
-```mermaid
-flowchart TD
-    AU["💳 Card autopay<br/>notice ≥ 24 h, then debit"] --> DB{"Debit<br/>works?"}
-    DB -- yes --> PAID
-    DB -- no --> RUN["Recovery run<br/>SMS → call → retry<br/>up to 4 tries in 10 days"]
-    INV["🧾 Business invoice"] --> LAD["Reminder ladder<br/>day −3 · 1 · 7 · 15"]
-    RUN --> ASK{"Customer<br/>response"}
-    LAD --> ASK
-    ASK -- pays --> PAID["✅ Paid"]
-    ASK -- "names a date" --> PR["🤝 Promise<br/>chasing pauses"]
-    PR -- "pays on time" --> PAID
-    PR -- "misses the date" --> FIRM["Chase resumes<br/>one step firmer"]
-    FIRM --> ASK
-    ASK -- "nothing, all steps used" --> END["Autopay → lost<br/>Invoice → finance team decides"]
-
-    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef bad fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
-    classDef promise fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
-    class PAID good
-    class END bad
-    class PR promise
-```
+<p align="center"><img src="docs/diagrams/autopay-invoice-promise.png" alt="Autopay and invoice recovery with promises to pay" width="720"></p>
+<p align="center"><sub>Editable source: <code>docs/diagrams/autopay-invoice-promise.drawio</code></sub></p>
 
 - **Promises:** a consumer can promise a date up to 7 days out and a business up to 30. Payment is allowed one day late.
 - **Two broken promises go to a person.** A promise only changes the chasing; it never moves money.
@@ -388,48 +334,11 @@ resumes "one step firmer", measured from the invoice's age on the ladder.
 
 One generic `place_call(subject_type, id)` with adapters for invoices, failed autopay debits and failed storefront orders.
 
-```mermaid
-flowchart TD
-    MIC["🎙️ Mic<br/>the browser listens"] --> CLIP["Short audio clip"]
-    CLIP --> STT["Speech to text<br/>(Whisper)"]
-    STT --> SR{"Short reply?<br/>haan · nahi · ruko"}
+<p align="center"><img src="docs/diagrams/voice-agent-turn.png" alt="One turn of a voice call: listen, transcribe, short-reply shortcut, retrieve, decide, check, speak, remember" width="440"></p>
+<p align="center"><sub>Editable source: <code>docs/diagrams/voice-agent-turn.drawio</code></sub></p>
 
-    SR -- yes --> FIX["Fixed pre-written reply"]
-    SR -- no --> RAG["RAG: finds useful facts<br/>• merchant policy<br/>• customer memory"]
-
-    RAG --> LLM["LLM (Groq)<br/>conversation + retrieved facts"]
-    LLM --> DRAFT["Draft reply"]
-    DRAFT --> CHK{"Draft checker<br/>numbers · wording · language"}
-
-    CHK -- fail --> FIX
-    CHK -- pass --> REPLY["Reply"]
-
-    FIX --> TTS["Text to speech<br/>(Azure neural voice)"]
-    REPLY --> TTS
-    TTS --> SENT["🔊 Sent to the customer"]
-    SENT --> VT[("Voice turns<br/>every line is saved; the call is summarised<br/>and saved in the customer's memory")]
-
-    classDef step fill:#eef2ff,stroke:#6366f1,color:#1e1b4b
-    classDef ask fill:#fef3c7,stroke:#d97706,color:#78350f
-    classDef fixed fill:#ffedd5,stroke:#ea580c,color:#7c2d12
-    classDef ai fill:#f3e8ff,stroke:#9333ea,color:#3b0764
-    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d
-    classDef store fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
-    class MIC,CLIP,DRAFT step
-    class SR,CHK ask
-    class FIX fixed
-    class STT,RAG,LLM,TTS ai
-    class REPLY,SENT good
-    class VT store
-```
-
-🟣 uses an outside AI service (Whisper, Groq, Azure) · 🟠 a decision or a safe fixed line · 🔵 saved data
-
-This is what happens on **every turn** of a call, and it repeats until the call ends. A short answer like "haan" never reaches the AI: it gets
-a fixed reply straight away. Anything longer is answered from the merchant's policy and the customer's memory, and the AI's draft is only spoken
-if the checker passes it; otherwise a fixed pre-written line is spoken instead. Before the call starts, the system also builds a short profile
-of the customer (from our own records and, if they agreed, their memory) that shapes the tone, the date it suggests and the pace of the voice.
-The numbered list below goes through each step in detail.
+This repeats on every turn until the call ends. A short answer like "haan" never reaches the AI. Anything longer is answered from the merchant's
+policy and the customer's memory, and the AI's draft is only spoken if the checker passes it; otherwise a fixed pre-written line is used.
 
 **How one turn flows**
 
@@ -478,21 +387,6 @@ not on DND.
 Consumer calls are for failed payments only (never abandoned carts) above a minimum value. A "dispute" on a mandate call is an
 unauthorised-debit claim: automatic attempts stop and it goes to a human.
 
-**Conversation (`voice_chat.py`, `persona.py`).** Multi-turn: the customer may ask (amount / why / due / how to pay / who / partial / repeat)
-before deciding. One model call per turn returns intent, promise date and a candidate reply; **code then validates the reply** before it is
-spoken — only real amounts and dates, no fee/interest/waiver/legal/threat wording, no spelled big numbers, no human claim, no links, the right
-language, ≤ 320 characters. Any failure → the fixed template for that question. The opening always says "AI assistant … may be recorded", and
-"are you a robot?" is answered honestly. Hardship gets one acknowledgement and "give a date or a person" instead of an escalation.
-
-**Understanding speech.**
-- *Dates* are read by a deterministic Hinglish/Devanagari reader (`voice.parse_promise_date`); when the model's date disagrees with the
-  words, the words win and the agent confirms ("shall I note 12 Oct?"). No date → it asks, twice, then hands to a person.
-- *Short replies* (`short_replies.py`): whole-utterance word lists for yes / no / later / wait / repeat / acknowledgement / "send it", in
-  Roman Hinglish, English and Devanagari, tolerant of stretched spellings ("nahhh", "haaan"). A bare first "no" is checked once, never an
-  instant refusal. The browser VAD keeps 250 ms of speech so a quick "haan" isn't dropped.
-- *Hands-free listening*: Silero VAD in the browser, barge-in (the agent stops when interrupted), Whisper STT with the merchant and invoice
-  words as bias; clips under 0.3 s, near-silent or known phantom phrases are dropped server-side.
-
 **Knowledge and memory — two stores, one search surface** (`retrieval.py`, hybrid vector + full-text with reciprocal-rank fusion):
 
 | Store | Owner | Holds | Rules |
@@ -510,40 +404,12 @@ another's answer. Every row carries a `merchant_id`.
 
 ---
 
-### Voice delivery: what is applied today, and what a richer voice could add
+### Voice delivery
 
-The system works out more about each customer than the current voice can express. This is the honest split. The default voice is Azure
-**Dragon HD** (`en-IN-Meera`), chosen because it sounded the most human of those compared by ear (against the standard Neerja voice).
-
-**What this voice obeys.** Measured on the audio itself (`scripts/hd_voice_probe.py`, 2026-10-23), not taken from documentation:
-
-| Control | Result on en-IN-Meera HD | Used |
-|---|---|---|
-| Pace (`prosody rate`) | Honoured: -40% made a clip 55% longer, +40% 35% shorter | Yes: gentle -3%, brief +6% |
-| Pauses (`break`) | Honoured: a 2 s break added about 1.9 s | Yes: +100 ms after each sentence for gentle |
-| Pitch | Ignored: median pitch unchanged at +40% and -40% | No |
-| Speaking styles (`express-as`, inline `[sympathetic]`) | Ignored: a whisper and a shout changed neither loudness nor pitch | No |
-
-Microsoft's own table lists `prosody` as unsupported for DragonHD, so the pace behaviour is undocumented and could change; it can be
-switched off with `AZURE_HD_DELIVERY=false`. The same style test on `en-US-Ava` (also Dragon HD) changed the audio strongly (a whisper
-about half as loud, a shout higher), so style control is a property of the individual voice, not of Dragon HD as a whole.
-
-**What we extract, what is applied today, and what a richer voice could do:**
-
-| Extracted from history and the call | Applied today (any voice) | Extra with a voice that supports styles and pitch |
-|---|---|---|
-| Approach: gentle, brief, steady, explain-first | Wording, the model's prompt, the first "by when?" line; pace and pauses (gentle, brief) | A sympathetic or reassuring style for gentle, calm for steady, confident for brief |
-| The customer's mood during the call (calm, frustrated, distressed) | Fixed kind lines, an apology, staying gentle for the rest of the call | The voice itself softening to match, not just the words |
-| Mood at the end of their last call | The approach choice | A matching opening tone |
-| A successful close (promise booked) | A fixed closing line | A lighter, warmer lift |
-| Amounts and dates | Spoken plainly | Emphasis or slower digits (pace could do this on Dragon HD; not added, to leave the plain voice untouched) |
-| A question to the customer | Punctuation | A rising pitch and a longer pause before it |
-| Fillers ("acha,") | Rationed and varied in the words | A quicker, lower delivery, and breath or sigh sounds |
-
-**What was checked and what was not.** The style test on Meera and Ava and the pace, pause and pitch measurements are real. Dragon HD
-Omni, which Microsoft documents with style control and a speed setting, was not adopted: its Meera version does not exist (the service
-answered HTTP 400), and no other Omni voice was tried. Ava's Hindi pronunciation was not judged by ear. To use a style-capable voice, set the
-`AZURE_VOICE_*` settings and add the voice to `speech._STYLE_VOICES`; the style choices per approach already exist in `persona.style_for`.
+The default voice is Azure **Dragon HD** (`en-IN-Meera`). Measured on the audio itself (`scripts/hd_voice_probe.py`): pace and pauses are obeyed
+(gentle −3 % pace and +100 ms after each sentence, brief +6 %); pitch and speaking styles are ignored on this voice. Pace control is undocumented by
+Microsoft, so it can be switched off with `AZURE_HD_DELIVERY=false`. A voice that supports styles can be set through the `AZURE_VOICE_*` settings
+and `speech._STYLE_VOICES`.
 
 ---
 
@@ -665,10 +531,10 @@ vendor calls. The backend runs **exactly as it would live**; only the console ad
 ## Testing and evaluation
 
 ```bash
-python -m pytest tests -q                 # 38 pure-logic unit tests
+python -m pytest tests -q                 # 44 pure-logic unit tests
 python -m evals.run                       # 14 offline suites (~970 cases), ~20 s, against a throwaway `rr_eval` database
 python -m evals.run --live                # also the suite that calls the real model (Groq free tier: ~3 turns a minute)
-python -m evals.selftest                  # 20 deliberate breakages the suites MUST catch
+python -m evals.selftest                  # 26 deliberate breakages the suites MUST catch
 ```
 
 The eval pipeline never touches your real data (it refuses any database not named `rr_eval`) and writes `evals/reports/<time>.{json,md}`. A
@@ -848,7 +714,7 @@ full list; the essentials:
 
 - **Schema changes.** `create_all` only adds missing *tables*. Columns and enum values live in idempotent files under `sql/` (run them in
   date order after the first start of new code, twice is safe): `for f in sql/*.sql; do psql -d revenue_recovery -q -f $f; done`.
-  There is no Alembic; this is a known gap (see roadmap).
+  There is no Alembic; this is a known gap .
 - **Scripts** (`scripts/`): `seed_demo_all.py`, `reset_demo_data.py`, `create_merchant.py`, `simulate_webhook.py`, `razorpay_probe.py`,
   `live_check.py` (one real OTP to yourself), `bench_retrieval.py`, `eval_stt.py`.
 - **Audit integrity.** `GET /audit/verify` walks the hash chain; `GET /audit/log` reads it.
@@ -890,7 +756,6 @@ full list; the essentials:
 
 ---
 
-
 ## Repository layout
 
 ```
@@ -915,8 +780,6 @@ sql/                         idempotent column / enum migrations
 evals/  tests/               14 offline eval suites + live suite + mutation self-test · unit tests
 data/                        store_policy.md (the agent's approved knowledge) · sample_policy.md
 ```
-
-
 
 ---
 
